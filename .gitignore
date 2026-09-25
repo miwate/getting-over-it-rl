@@ -1,0 +1,11 @@
+# Decompiled game code and anything extracted from the game. Never commit.
+_decompiled/
+
+# Build output, and your local install path
+bin/
+obj/
+__pycache__/
+plugin/GameDir.props
+
+# Markdown docs stay local for now
+*.md
