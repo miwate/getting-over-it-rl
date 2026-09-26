@@ -133,7 +133,8 @@ def main():
     ap.add_argument("--game-dir", default=os.environ.get("GOI_GAME_DIR"), help="install folder (or set GOI_GAME_DIR)")
     ap.add_argument("--name", default=time.strftime("ppo-%Y%m%d-%H%M%S"), help="run folder under runs/")
     ap.add_argument("--steps", type=int, default=10_000_000, help="environment steps to train for")
-    ap.add_argument("--envs", type=int, default=5, help="games in parallel (at most 5 per install)")
+    ap.add_argument("--envs", type=int, default=5,
+                    help="games in parallel (at most 5 per install while BepInEx writes its disk log; 10 tested without)")
     ap.add_argument("--k", type=int, default=4, help="physics steps (1/120 s) per action")
     ap.add_argument("--episode-steps", type=int, default=3000, help="time limit in actions (3000 = 100 s at k=4)")
     ap.add_argument("--stall-seconds", type=float, default=10,
