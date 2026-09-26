@@ -6,6 +6,8 @@ bin/
 obj/
 __pycache__/
 .venv/
+runs/
+*.mp4
 plugin/GameDir.props
 
 # Markdown docs stay local for now
