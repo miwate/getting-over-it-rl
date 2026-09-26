@@ -13,7 +13,7 @@ using Object = UnityEngine.Object;
 // callbacks to disabled scripts, so their contact bookkeeping keeps working. Replays from a snapshot are bit-exact.
 class Game
 {
-    public const int ObsFields = 22; // layout: OBS_FIELDS in goi_env/client.py, then RayCount ray distances
+    public const int ObsFields = 29; // layout: OBS_FIELDS in goi_env/client.py, then RayCount ray distances
     static readonly float[] Ahead = { 2f, 5f, 10f }; // route points observed, in distance along the route past the pot
     public int K = 4;                // physics steps per action
     public int RayCount = 16;
@@ -95,6 +95,8 @@ class Game
         if (!pc.loadFinished) return false;
         pc.enabled = hammer.enabled = potSounds.enabled = craneMove.enabled = false;
         pose.enabled = false; // its per-frame write to Player/Hub's Transform nudges the bodies; Step() runs it instead
+        pc.trackpad = false;  // the game applies the player's own mouse settings; RL games use the mouse defaults
+        F.Sensitivity.SetValue(pc, 1f);
         pose.anim.enabled = false; // visual only: its own per-frame update would undo the pose script's hands-on-handle IK
         cam.enabled = false;       // visual only: a camera spring on Unity's clock trails a game that runs faster than real time
         player.GetComponent<Saviour>().enabled = false;  // autosave
@@ -110,15 +112,17 @@ class Game
         return ready = true;
     }
 
+    // action: the mouse input the game's controller reads every physics step, as if a player moved the mouse. The game's
+    // own acceleration curve, smoothing, 3.5 reach and idle drift all apply: a still mouse lets the cursor settle on
+    // the hammer head, and the hammer goes loose.
     public void Step(Vector2 action)
     {
-        var offset = Vector2.ClampMagnitude(action, 3.5f); // the game keeps its cursor within 3.5 units of the pot
+        VirtualMouse.Input = Vector2.ClampMagnitude(action, 100f);
         for (int i = 0; i < K; i++)
         {
-            cursor.position = pot.position + offset; // PlayerControl reads the cursor as its target
             hammerFixedUpdate();                     // execution order 0: friction materials from last step's contacts
             potFixedUpdate();
-            controlFixedUpdate();                    // execution order 2000: hinge and slider motors toward the cursor
+            controlFixedUpdate();                    // execution order 2000: moves the cursor by the mouse, motors toward it
             simTime += dt;
             crane.MovePosition(new Vector2(craneStart.x + Mathf.Sin(simTime) * 0.01f, craneStart.y)); // CraneMove, on sim time
             if (!world.Simulate(dt)) throw new InvalidOperationException("PhysicsScene2D.Simulate did not run");
@@ -153,6 +157,12 @@ class Game
             o[16 + 2 * i] = q.x - p.x;
             o[17 + 2 * i] = q.y - p.y;
         }
+        Vector2 c = cursor.position, head = tip.position; // the cursor is where the controller aims next
+        o[22] = c.x - p.x; o[23] = c.y - p.y;
+        o[24] = c.x - head.x; o[25] = c.y - head.y;
+        var mouse = (Vector2)F.MouseInput.GetValue(pc); // the controller's smoothed mouse input
+        o[26] = mouse.x; o[27] = mouse.y;
+        o[28] = (float)F.MouseSpeed.GetValue(pc);      // its running mouse speed: the cursor's gain, and no idle drift when fast
         for (int i = 0; i < RayCount; i++)
         {
             float a = 2 * Mathf.PI * i / RayCount;
@@ -210,6 +220,9 @@ class Game
         s.sliderSpeed = pc.sj.motor.motorSpeed;
         s.won = Patches.Won;
         s.mw = (Vector2)F.Mw.GetValue(pc);
+        s.mouseInput = (Vector2)F.MouseInput.GetValue(pc);
+        s.oldMouse = (Vector2)F.OldMouse.GetValue(pc);
+        s.mouseSpeed = (float)F.MouseSpeed.GetValue(pc);
         s.mouseSnap = (bool)F.MouseSnap.GetValue(pc);
         s.hammerSlide = (bool)F.HammerSlide.GetValue(hammer);
         s.hammerKeys = Keys(F.HammerPoints.GetValue(hammer));
@@ -271,6 +284,9 @@ class Game
         simTime = s.simTime;
         Patches.Won = s.won;
         F.Mw.SetValue(pc, s.mw);
+        F.MouseInput.SetValue(pc, s.mouseInput);
+        F.OldMouse.SetValue(pc, s.oldMouse);
+        F.MouseSpeed.SetValue(pc, s.mouseSpeed);
         F.MouseSnap.SetValue(pc, s.mouseSnap);
         F.PauseInput.SetValue(pc, 0f);
         F.InputsToSkip.SetValue(pc, 0);
@@ -322,8 +338,8 @@ class Game
         public Quaternion[] pose; // Transform rotation; rot is the physics angle
         public bool[] active, awake;
         public RigidbodyType2D[] type;
-        public Vector2 gravity, mw;
-        public float simTime, giftTime, hingeSpeed, sliderSpeed;
+        public Vector2 gravity, mw, mouseInput, oldMouse;
+        public float simTime, giftTime, hingeSpeed, sliderSpeed, mouseSpeed;
         public bool won, mouseSnap, hammerSlide, potSlide, creditsUp, giftSpawned, giftOpened, lakeReset;
         public Collider2D[] hammerKeys, potKeys;
     }
@@ -337,6 +353,8 @@ class Game
         public static readonly FieldInfo
             Mw = Of<PlayerControl>("mw"), MouseSnap = Of<PlayerControl>("mouseSnap"),
             PauseInput = Of<PlayerControl>("pauseInputTimer"), InputsToSkip = Of<PlayerControl>("inputsToSkip"),
+            MouseInput = Of<PlayerControl>("mouseInput"), OldMouse = Of<PlayerControl>("oldMouse"),
+            MouseSpeed = Of<PlayerControl>("mouseVelocityAverage"), Sensitivity = Of<PlayerControl>("mouseSensitivity"),
             HammerSlide = Of<HammerCollisions>("slide"), HammerPoints = Of<HammerCollisions>("collisionPoints"),
             HammerBuffer = Of<HammerCollisions>("contacts"),
             PotSlide = Of<PotSounds>("slide"), PotPoints = Of<PotSounds>("collisionPoints"), PotBuffer = Of<PotSounds>("contacts"),

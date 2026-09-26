@@ -33,7 +33,9 @@ public class Plugin : BaseUnityPlugin
         if (!rlMode) return;
         Application.runInBackground = true; // off in the game's player settings, so unfocused instances would stall
         Patches.Log = Logger;
-        int patched = Harmony.CreateAndPatchAll(typeof(Patches)).GetPatchedMethods().Count();
+        var harmony = Harmony.CreateAndPatchAll(typeof(Patches));
+        harmony.PatchAll(typeof(VirtualMouse));
+        int patched = harmony.GetPatchedMethods().Count();
         Logger.LogInfo($"RL mode: {patched} methods patched");
         server = new Server(IntArg("-goi-port", 5555), Logger);
         StartCoroutine(AnswerFrameRequests());
@@ -95,6 +97,22 @@ public class Plugin : BaseUnityPlugin
     {
         int i = Array.IndexOf(Args, name);
         return i >= 0 && i + 1 < Args.Length && int.TryParse(Args[i + 1], out var v) ? v : fallback;
+    }
+}
+
+// Installed in RL mode only. The game's controller reads the mouse through Rewired; the agent's virtual mouse replaces
+// it (and the gamepad sticks read 0), so a real mouse can't reach RL games either.
+[HarmonyPatch]
+static class VirtualMouse
+{
+    public static Vector2 Input;
+
+    static MethodBase TargetMethod() => AccessTools.Method("Rewired.Player:GetAxis", new[] { typeof(string) });
+
+    static bool Prefix(string actionName, ref float __result)
+    {
+        __result = actionName == "mouseX" ? Input.x : actionName == "mouseY" ? Input.y : 0f;
+        return false;
     }
 }
 

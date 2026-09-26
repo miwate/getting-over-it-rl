@@ -20,6 +20,8 @@ OBS_FIELDS = (
     "head_contact", "pot_contact", "fell_in_lake", "won",  # 0/1 flags
     "progress",  # distance along the level route to the point nearest the pot (the game's ProgressMeter)
     "ahead2_dx", "ahead2_dy", "ahead5_dx", "ahead5_dy", "ahead10_dx", "ahead10_dy",  # route 2/5/10 further on, from the pot
+    "cursor_dx", "cursor_dy", "cursor_head_dx", "cursor_head_dy",  # the cursor the hammer aims at, from the pot and the head
+    "mouse_x", "mouse_y", "mouse_speed",  # the controller's smoothed mouse input and running mouse speed
 )
 
 
@@ -71,7 +73,7 @@ def start(game_dir, port=None, width=640, height=360, args=(), **config):
 class GoiClient:
     """Lockstep connection to one game instance.
 
-    Actions are hammer targets relative to the pot, in world units (clamped to the game's 3.5 reach).
+    Actions are the mouse input the game reads each physics step (the controller turns it into cursor motion).
     """
 
     def __init__(self, port=5555, timeout=180.0, **config):
@@ -100,8 +102,8 @@ class GoiClient:
     def reset(self):
         return self._obs_call(b"r")
 
-    def step(self, dx, dy):
-        return self._obs_call(b"s" + struct.pack("<ff", dx, dy))
+    def step(self, mouse_x, mouse_y):
+        return self._obs_call(b"s" + struct.pack("<ff", mouse_x, mouse_y))
 
     def save_state(self):
         return self._int(b"v")

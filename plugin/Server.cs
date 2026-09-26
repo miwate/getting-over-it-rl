@@ -9,7 +9,7 @@ using UnityEngine;
 // crashed or interrupted trainer never leaves games running (and BepInEx allows only 5 per install).
 // Request: 1 command byte + fixed-size payload. Response: int32 byte count + payload (float32 obs, or int32s).
 //   'k' configure(int k, int rays, float rayLength, int render, int width, int height) -> int obs length
-//   'r' reset -> obs            's' step(float dx, float dy) -> obs            'v' save_state -> int id
+//   'r' reset -> obs            's' step(float mouseX, float mouseY) -> obs    'v' save_state -> int id
 //   'l' load_state(int id) -> obs, or empty for an unknown id                 'c' close -> empty, then the game quits
 //   'd' drop_state(int id) -> empty: frees a saved state
 //   'f' frame -> int width, int height, then RGB rows top-down: the image rendered after the last step (render on)
