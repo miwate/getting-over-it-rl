@@ -20,12 +20,14 @@ class GoiEnv(gym.Env):
     Action: a point in [-1, 1]^2, mapped onto the disk the hammer can reach around the pot.
     Reward: progress along the level route beyond the episode's best so far (new records only), minus a time penalty
     per step. Raw height would pay for hopping in place; the route first goes right, over the lakeside rocks.
-    Episodes end when the pot falls in the lake or wins; wrap in TimeLimit for truncation.
+    Episodes end when the pot falls in the lake or wins, and are truncated after stall_steps without a new record
+    (if set; beating it by 0.1 counts, so resting jitter doesn't). Wrap in TimeLimit for a time limit.
+    reset(options={"state": id}) starts an episode from a saved state instead of the bottom.
     """
 
     metadata = {"render_modes": ["human", "rgb_array"]}
 
-    def __init__(self, game_dir=None, port=None, k=4, n_rays=16, ray_length=10.0, time_penalty=0.001,
+    def __init__(self, game_dir=None, port=None, k=4, n_rays=16, ray_length=10.0, time_penalty=0.001, stall_steps=None,
                  render_mode=None, realtime=True, width=640, height=360, game_args=()):
         """Launches the game from game_dir on a free port, or with game_dir=None connects to one already running on
         `port` (default 5555).
@@ -39,6 +41,7 @@ class GoiEnv(gym.Env):
         self._realtime = render_mode == "human" and realtime
         self._frame_due = 0.0
         self.time_penalty = time_penalty
+        self.stall_steps = stall_steps
         config = dict(k=k, n_rays=n_rays, ray_length=ray_length, render=render_mode is not None,
                       width=width, height=height)
         if game_dir:
@@ -52,8 +55,10 @@ class GoiEnv(gym.Env):
 
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
-        raw = self.client.reset()
-        self.best_progress = raw[PROGRESS]
+        state = (options or {}).get("state")
+        raw = self.client.reset() if state is None else self.client.load_state(state)
+        self.best_progress = self._stall_mark = raw[PROGRESS]
+        self._stalled = 0
         return self._observe(raw), {"best_progress": self.best_progress}
 
     def step(self, action):
@@ -64,11 +69,15 @@ class GoiEnv(gym.Env):
         raw = self.client.step(dx, dy)
         reward = max(0.0, raw[PROGRESS] - self.best_progress) - self.time_penalty
         self.best_progress = max(self.best_progress, raw[PROGRESS])
+        self._stalled += 1
+        if raw[PROGRESS] >= self._stall_mark + 0.1:
+            self._stall_mark, self._stalled = raw[PROGRESS], 0
         terminated = bool(raw[LAKE] or raw[WON])
+        truncated = self.stall_steps is not None and self._stalled >= self.stall_steps
         if self._realtime:  # the bridge itself runs many times faster than real time
             self._frame_due = max(self._frame_due + 1 / self.metadata["render_fps"], time.perf_counter())
             time.sleep(max(0.0, self._frame_due - time.perf_counter()))
-        return self._observe(raw), reward, terminated, False, {"best_progress": self.best_progress}
+        return self._observe(raw), reward, terminated, truncated, {"best_progress": self.best_progress}
 
     def render(self):
         if self.render_mode == "rgb_array":
