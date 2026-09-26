@@ -1,5 +1,4 @@
 """Gymnasium environment for Getting Over It, driven through the GOI RL Bridge plugin."""
-import math
 import time
 
 import gymnasium as gym
@@ -8,16 +7,21 @@ from gymnasium import spaces
 
 from .client import OBS_FIELDS, GoiClient, start
 
-REACH = 3.5  # the game keeps its cursor within 3.5 units of the pot
+# Mouse input at action 1. The game's acceleration curve makes small inputs fine (below ~3: under 0.15 units of cursor
+# travel per step) and large ones flicks (12: the whole 3.5 reach in one step).
+MOUSE = 12.0
 PROGRESS, LAKE, WON = (OBS_FIELDS.index(f) for f in ("progress", "fell_in_lake", "won"))
 
 
 class GoiEnv(gym.Env):
     """One game instance.
 
-    Observation: the bridge's fields (OBS_FIELDS in client.py), n_rays terrain distances, the previous action, then how
-    far the pot is behind the episode's progress record (the reward only pays beyond it).
-    Action: a point in [-1, 1]^2, mapped onto the disk the hammer can reach around the pot.
+    Observation: the bridge's fields (OBS_FIELDS in client.py), n_rays terrain distances, how long the pot has gone
+    without headway (as a share of stall_steps; 0 without a cutoff), then how far it is behind the episode's progress
+    record (the reward only pays beyond it).
+    Action: mouse movement in [-1, 1]^2, as a player's mouse: the game's controller moves its cursor by it (with its own
+    acceleration and smoothing) and drives the hammer head toward the cursor. A still mouse lets the cursor settle on
+    the head: the hammer goes loose.
     Reward: progress along the level route beyond the episode's best so far (new records only), minus a time penalty
     per step. Raw height would pay for hopping in place; the route first goes right, over the lakeside rocks.
     Episodes end when the pot falls in the lake or wins, and are truncated after stall_steps without headway (if set):
@@ -49,7 +53,7 @@ class GoiEnv(gym.Env):
             self._proc, self.client = start(game_dir, port, args=game_args, **config)
         else:
             self._proc, self.client = None, GoiClient(port=port or 5555, **config)
-        self.observation_space = spaces.Box(-np.inf, np.inf, (self.client.obs_size + 3,), np.float32)
+        self.observation_space = spaces.Box(-np.inf, np.inf, (self.client.obs_size + 2,), np.float32)
         self.action_space = spaces.Box(-1.0, 1.0, (2,), np.float32)
         self.best_progress = 0.0
         self._saved_best = {}
@@ -60,16 +64,11 @@ class GoiEnv(gym.Env):
         raw = self.client.reset() if state is None else self.client.load_state(state)
         self.best_progress = self._stall_mark = raw[PROGRESS]
         self._stalled = 0
-        self._last_action = (0.0, 0.0)
         return self._observe(raw), {"best_progress": self.best_progress}
 
     def step(self, action):
-        x, y = np.clip(action, -1.0, 1.0)
-        self._last_action = (x, y)
-        # Square to disk (elliptical grid mapping): every point of the action box reaches a distinct target.
-        dx = x * math.sqrt(1 - y * y / 2) * REACH
-        dy = y * math.sqrt(1 - x * x / 2) * REACH
-        raw = self.client.step(dx, dy)
+        x, y = np.clip(action, -1.0, 1.0) * MOUSE
+        raw = self.client.step(x, y)
         reward = max(0.0, raw[PROGRESS] - self.best_progress) - self.time_penalty
         self.best_progress = max(self.best_progress, raw[PROGRESS])
         self._stalled += 1
@@ -104,7 +103,8 @@ class GoiEnv(gym.Env):
         self._saved_best.pop(state_id, None)
 
     def _observe(self, raw):
-        return np.array([*raw, *self._last_action, self.best_progress - raw[PROGRESS]], np.float32)
+        stuck = self._stalled / self.stall_steps if self.stall_steps else 0.0
+        return np.array([*raw, stuck, self.best_progress - raw[PROGRESS]], np.float32)
 
     def close(self):
         self.client.close()
