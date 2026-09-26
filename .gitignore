@@ -5,6 +5,7 @@ _decompiled/
 bin/
 obj/
 __pycache__/
+.venv/
 plugin/GameDir.props
 
 # Markdown docs stay local for now

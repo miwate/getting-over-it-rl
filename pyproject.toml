@@ -1,0 +1,10 @@
+[project]
+name = "goi-env"
+version = "0.1.0"
+description = "Gymnasium environment for Getting Over It with Bennett Foddy, via the GOI RL Bridge BepInEx plugin"
+requires-python = ">=3.10"
+dependencies = ["gymnasium>=1.0", "numpy>=1.24"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
