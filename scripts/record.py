@@ -18,13 +18,15 @@ def main():
     ap.add_argument("--out", help="video file (default: the checkpoint's name with .mp4)")
     ap.add_argument("--seconds", type=float, default=60, help="game time to record")
     ap.add_argument("--k", type=int, default=4, help="physics steps per action; must match training")
+    ap.add_argument("--colliders", action="store_true", help="draw the physics shapes over the game")
     args = ap.parse_args()
     if not args.game_dir:
         ap.error("pass --game-dir or set GOI_GAME_DIR")
 
     fps = 120 / args.k
-    out = args.out or args.checkpoint[:-4] + ".mp4"
-    game = TimeLimit(GoiEnv(args.game_dir, k=args.k, render_mode="rgb_array", width=1280, height=720),
+    out = args.out or args.checkpoint[:-4] + ("-colliders" if args.colliders else "") + ".mp4"
+    game = TimeLimit(GoiEnv(args.game_dir, k=args.k, render_mode="rgb_array", width=1280, height=720,
+                            game_args=["-goi-colliders"] if args.colliders else []),
                      int(args.seconds * fps))
     env = VecNormalize.load(vecnormalize_path(args.checkpoint), DummyVecEnv([lambda: game]))
     env.training = env.norm_reward = False

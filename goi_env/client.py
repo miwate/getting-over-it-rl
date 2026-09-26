@@ -48,8 +48,9 @@ def _one_game_starting():
             msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
 
 
-def start(game_dir, port=None, width=640, height=360, **config):
-    """Launch the game in RL mode and connect to it; returns (process, client). Config as in GoiClient.configure.
+def start(game_dir, port=None, width=640, height=360, args=(), **config):
+    """Launch the game in RL mode and connect to it; returns (process, client). Config as in GoiClient.configure;
+    args are extra launch flags (e.g. "-goi-colliders").
 
     Games start one at a time, across all processes, until their level has loaded. A game quits when its client
     disconnects.
@@ -58,7 +59,7 @@ def start(game_dir, port=None, width=640, height=360, **config):
     exe = Path(game_dir) / "GettingOverIt.exe"
     with _one_game_starting():
         proc = subprocess.Popen([str(exe), "-goi-rl", "-goi-port", str(port), "-screen-fullscreen", "0",
-                                 "-screen-width", str(width), "-screen-height", str(height)], cwd=game_dir)
+                                 "-screen-width", str(width), "-screen-height", str(height), *args], cwd=game_dir)
         try:
             return proc, GoiClient(port=port, width=width, height=height, **config)
         except BaseException:

@@ -25,12 +25,13 @@ class GoiEnv(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"]}
 
     def __init__(self, game_dir=None, port=None, k=4, n_rays=16, ray_length=10.0, time_penalty=0.001,
-                 render_mode=None, realtime=True, width=640, height=360):
+                 render_mode=None, realtime=True, width=640, height=360, game_args=()):
         """Launches the game from game_dir on a free port, or with game_dir=None connects to one already running on
         `port` (default 5555).
 
         render_mode="human" shows the game window at real speed; realtime=False lets it run as fast as it can.
         render_mode="rgb_array" makes render() return the frame the game drew after the last step.
+        game_args: extra launch flags, e.g. ["-goi-colliders"] to draw the physics shapes over the game.
         """
         self.render_mode = render_mode
         self.metadata = {**self.metadata, "render_fps": 120 / k}
@@ -40,7 +41,7 @@ class GoiEnv(gym.Env):
         config = dict(k=k, n_rays=n_rays, ray_length=ray_length, render=render_mode is not None,
                       width=width, height=height)
         if game_dir:
-            self._proc, self.client = start(game_dir, port, **config)
+            self._proc, self.client = start(game_dir, port, args=game_args, **config)
         else:
             self._proc, self.client = None, GoiClient(port=port or 5555, **config)
         self.observation_space = spaces.Box(-np.inf, np.inf, (self.client.obs_size,), np.float32)

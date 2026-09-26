@@ -16,6 +16,7 @@ public class Plugin : BaseUnityPlugin
     // Launch flags. Without them the game plays normally apart from the 1 Hz log line.
     // -goi-rl: RL mode. Skips the menu, serves the bridge on 127.0.0.1 (-goi-port N, default 5555), steps physics
     //          only on request, and never writes PlayerPrefs. -goi-dump: write engine-only data once per level load.
+    // -goi-colliders: draw the physics shapes over the game (see ColliderOverlay).
     static readonly string[] Args = Environment.GetCommandLineArgs();
     readonly bool rlMode = Args.Contains("-goi-rl");
     readonly bool dump = Args.Contains("-goi-dump");
@@ -28,6 +29,7 @@ public class Plugin : BaseUnityPlugin
 
     void Awake()
     {
+        if (Args.Contains("-goi-colliders")) ColliderOverlay.Enable();
         if (!rlMode) return;
         Application.runInBackground = true; // off in the game's player settings, so unfocused instances would stall
         Patches.Log = Logger;
