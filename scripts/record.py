@@ -41,7 +41,7 @@ def main():
                 video.append_data(env.render())
     finally:
         env.close()
-    print(f"wrote {out} ({infos[0]['best_height']:.1f} best height)")
+    print(f"wrote {out} ({infos[0]['best_progress']:.1f} best route progress)")
 
 
 if __name__ == "__main__":

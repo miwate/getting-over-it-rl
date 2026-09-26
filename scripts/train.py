@@ -23,8 +23,8 @@ def vecnormalize_path(checkpoint):
     return re.sub(r"ppo_(\d+)_steps\.zip$", r"ppo_vecnormalize_\1_steps.pkl", checkpoint)
 
 
-class HeightLog(BaseCallback):
-    """TensorBoard: best height per episode (mean over the last 100 episodes) and the best height reached so far."""
+class ProgressLog(BaseCallback):
+    """TensorBoard: best route progress per episode (mean over the last 100 episodes) and the best reached so far."""
 
     def __init__(self):
         super().__init__()
@@ -34,11 +34,11 @@ class HeightLog(BaseCallback):
         return True
 
     def _on_rollout_end(self):
-        heights = [ep["best_height"] for ep in self.model.ep_info_buffer]
-        if heights:
-            self.record = max(self.record, *heights)
-            self.logger.record("rollout/best_height_mean", sum(heights) / len(heights))
-            self.logger.record("rollout/best_height_record", self.record)
+        best = [ep["best_progress"] for ep in self.model.ep_info_buffer]
+        if best:
+            self.record = max(self.record, *best)
+            self.logger.record("rollout/best_progress_mean", sum(best) / len(best))
+            self.logger.record("rollout/best_progress_record", self.record)
 
 
 def main():
@@ -58,7 +58,7 @@ def main():
     run_dir = os.path.join("runs", args.name)
     checkpoints = os.path.join(run_dir, "checkpoints")
     envs = [partial(make_env, args.game_dir, args.k, args.episode_steps)] * args.envs
-    venv = VecMonitor(SubprocVecEnv(envs), info_keywords=("best_height",))
+    venv = VecMonitor(SubprocVecEnv(envs), info_keywords=("best_progress",))
     try:
         if args.resume:
             venv = VecNormalize.load(vecnormalize_path(args.resume), venv)
@@ -70,7 +70,7 @@ def main():
         save = CheckpointCallback(max(args.save_every // args.envs, 1), checkpoints, name_prefix="ppo",
                                   save_vecnormalize=True)
         try:
-            model.learn(args.steps, callback=[save, HeightLog()], tb_log_name="tb", reset_num_timesteps=not args.resume)
+            model.learn(args.steps, callback=[save, ProgressLog()], tb_log_name="tb", reset_num_timesteps=not args.resume)
         except KeyboardInterrupt:
             print("interrupted: saving a final checkpoint")
         final = os.path.join(checkpoints, f"ppo_{model.num_timesteps}_steps.zip")
