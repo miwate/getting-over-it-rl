@@ -1,2 +1,2 @@
-from .client import OBS_FIELDS, GoiClient, launch
+from .client import OBS_FIELDS, GoiClient, start
 from .env import GoiEnv

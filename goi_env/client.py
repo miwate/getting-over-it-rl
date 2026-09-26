@@ -3,11 +3,14 @@
 Smoke test (stdlib only; launches the game, exercises every command, then quits it):
     python -m goi_env.client --game-dir "C:/.../steamapps/common/Getting Over It"
 """
+import msvcrt
+import os
 import socket
 import struct
 import subprocess
-import threading
+import tempfile
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 # Observation layout. The plugin appends n_rays distances from the pot to the terrain, counter-clockwise from +x.
@@ -18,10 +21,6 @@ OBS_FIELDS = (
 )
 
 
-_launch_lock = threading.Lock()
-_last_launch = 0.0
-
-
 def free_port():
     """A localhost TCP port nothing is listening on right now (other software may own fixed ones)."""
     with socket.socket() as s:
@@ -29,20 +28,41 @@ def free_port():
         return s.getsockname()[1]
 
 
-def launch(game_dir, port=5555, width=640, height=360):
-    """Start the game in RL mode; returns the Popen handle.
+@contextmanager
+def _one_game_starting():
+    """Machine-wide lock: BepInEx rewrites its shared config file as each game starts, and games that start together
+    come up without the mod. Windows releases the lock if its holder dies."""
+    with open(os.path.join(tempfile.gettempdir(), "goi-rl-start.lock"), "a+b") as f:
+        while True:
+            try:
+                f.seek(0)
+                msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+                break
+            except OSError:
+                time.sleep(0.2)
+        try:
+            yield
+        finally:
+            f.seek(0)
+            msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
 
-    Launches are spaced 2 s apart: BepInEx rewrites its shared config file as each game starts, and games that
-    start together can collide on it and come up without the mod.
+
+def start(game_dir, port=None, width=640, height=360, **config):
+    """Launch the game in RL mode and connect to it; returns (process, client). Config as in GoiClient.configure.
+
+    Games start one at a time, across all processes, until their level has loaded. A game quits when its client
+    disconnects.
     """
-    global _last_launch
-    # ponytail: spacing is per Python process; launchers in several processes need their own (e.g. sleep by rank)
-    with _launch_lock:
-        time.sleep(max(0.0, _last_launch + 2.0 - time.monotonic()))
-        _last_launch = time.monotonic()
-        exe = Path(game_dir) / "GettingOverIt.exe"
-        return subprocess.Popen([str(exe), "-goi-rl", "-goi-port", str(port), "-screen-fullscreen", "0",
+    port = port or free_port()
+    exe = Path(game_dir) / "GettingOverIt.exe"
+    with _one_game_starting():
+        proc = subprocess.Popen([str(exe), "-goi-rl", "-goi-port", str(port), "-screen-fullscreen", "0",
                                  "-screen-width", str(width), "-screen-height", str(height)], cwd=game_dir)
+        try:
+            return proc, GoiClient(port=port, width=width, height=height, **config)
+        except BaseException:
+            proc.kill()  # a game we launched but couldn't reach would never quit on its own
+            raise
 
 
 class GoiClient:
@@ -89,6 +109,12 @@ class GoiClient:
             raise KeyError(f"unknown state id {state_id}")
         return obs
 
+    def frame(self):
+        """The image rendered after the last step (needs render=True): width, height, RGB bytes with rows top-down."""
+        data = self._call(b"f")
+        width, height = struct.unpack_from("<ii", data)
+        return width, height, data[8:]
+
     def close(self):
         """Quit the game and close the connection."""
         try:
@@ -132,10 +158,8 @@ def _smoke_test():
     if not args.no_launch and not args.game_dir:
         ap.error("pass --game-dir or set GOI_GAME_DIR")
 
-    port = args.port or (5555 if args.no_launch else free_port())
-    proc = None if args.no_launch else launch(args.game_dir, port)
+    proc, c = (None, GoiClient(port=args.port or 5555)) if args.no_launch else start(args.game_dir, args.port)
     try:
-        c = GoiClient(port=port)
         obs = c.reset()
         print("reset:", {f: round(v, 3) for f, v in zip(OBS_FIELDS, obs)})
         print("rays:", [round(r, 2) for r in obs[len(OBS_FIELDS):]])

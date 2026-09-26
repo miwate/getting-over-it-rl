@@ -6,7 +6,7 @@ import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 
-from .client import OBS_FIELDS, GoiClient, free_port, launch
+from .client import OBS_FIELDS, GoiClient, start
 
 REACH = 3.5  # the game keeps its cursor within 3.5 units of the pot
 Y, LAKE, WON = (OBS_FIELDS.index(f) for f in ("pot_y", "fell_in_lake", "won"))
@@ -21,7 +21,7 @@ class GoiEnv(gym.Env):
     Episodes end when the pot falls in the lake or wins; wrap in TimeLimit for truncation.
     """
 
-    metadata = {"render_modes": ["human"]}
+    metadata = {"render_modes": ["human", "rgb_array"]}
 
     def __init__(self, game_dir=None, port=None, k=4, n_rays=16, ray_length=10.0, time_penalty=0.001,
                  render_mode=None, realtime=True, width=640, height=360):
@@ -29,22 +29,19 @@ class GoiEnv(gym.Env):
         `port` (default 5555).
 
         render_mode="human" shows the game window at real speed; realtime=False lets it run as fast as it can.
+        render_mode="rgb_array" makes render() return the frame the game drew after the last step.
         """
-        if port is None:
-            port = free_port() if game_dir else 5555
         self.render_mode = render_mode
         self.metadata = {**self.metadata, "render_fps": 120 / k}
         self._realtime = render_mode == "human" and realtime
         self._frame_due = 0.0
         self.time_penalty = time_penalty
-        self._proc = launch(game_dir, port, width, height) if game_dir else None
-        try:
-            self.client = GoiClient(port=port, k=k, n_rays=n_rays, ray_length=ray_length,
-                                    render=render_mode == "human", width=width, height=height)
-        except BaseException:
-            if self._proc:
-                self._proc.kill()  # don't leak a game we launched but couldn't reach
-            raise
+        config = dict(k=k, n_rays=n_rays, ray_length=ray_length, render=render_mode is not None,
+                      width=width, height=height)
+        if game_dir:
+            self._proc, self.client = start(game_dir, port, **config)
+        else:
+            self._proc, self.client = None, GoiClient(port=port or 5555, **config)
         self.observation_space = spaces.Box(-np.inf, np.inf, (self.client.obs_size,), np.float32)
         self.action_space = spaces.Box(-1.0, 1.0, (2,), np.float32)
         self.best_height = 0.0
@@ -72,7 +69,10 @@ class GoiEnv(gym.Env):
         return obs, reward, terminated, False, {"best_height": self.best_height}
 
     def render(self):
-        pass  # "human": the game window draws itself
+        if self.render_mode == "rgb_array":
+            width, height, rgb = self.client.frame()
+            return np.frombuffer(rgb, np.uint8).reshape(height, width, 3)
+        # "human": the game window draws itself
 
     def save_state(self):
         state_id = self.client.save_state()
