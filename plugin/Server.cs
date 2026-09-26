@@ -5,11 +5,13 @@ using System.Net.Sockets;
 using BepInEx.Logging;
 using UnityEngine;
 
-// Lockstep protocol on 127.0.0.1, one client at a time, little-endian.
-// Request: 1 command byte + fixed-size payload. Response: int32 byte count + payload (float32 obs, or one int32).
+// Lockstep protocol on 127.0.0.1, little-endian. A game serves one client session and quits when it ends, so a
+// crashed or interrupted trainer never leaves games running (and BepInEx allows only 5 per install).
+// Request: 1 command byte + fixed-size payload. Response: int32 byte count + payload (float32 obs, or int32s).
 //   'k' configure(int k, int rays, float rayLength, int render, int width, int height) -> int obs length
 //   'r' reset -> obs            's' step(float dx, float dy) -> obs            'v' save_state -> int id
 //   'l' load_state(int id) -> obs, or empty for an unknown id                 'c' close -> empty, then the game quits
+//   'f' frame -> int width, int height, then RGB rows top-down: the image rendered after the last step (render on)
 class Server
 {
     readonly TcpListener listener;
@@ -18,6 +20,8 @@ class Server
     readonly byte[] output = new byte[4 + 4 * 256];
     readonly float[] obs = new float[256];
     Socket client;
+
+    public bool FramePending { get; private set; }
 
     public Server(int port, ManualLogSource log)
     {
@@ -37,6 +41,7 @@ class Server
             client = listener.AcceptSocket();
             client.NoDelay = true;
         }
+        if (FramePending) return; // answered by SendFrame once this frame has been rendered
         var deadline = Time.realtimeSinceStartup + 0.05f;
         try
         {
@@ -78,6 +83,9 @@ class Server
                         Send(0);
                         Application.Quit();
                         return;
+                    case 'f':
+                        FramePending = true;
+                        return;
                     default:
                         throw new InvalidDataException($"unknown command byte {input[0]}");
                 }
@@ -85,11 +93,39 @@ class Server
         }
         catch (Exception e)
         {
-            log.LogWarning(e is EndOfStreamException || e is SocketException
-                ? $"bridge client left: {e.Message}" : $"bridge error, dropping client: {e}");
-            client.Close();
-            client = null;
+            EndSession(e);
         }
+    }
+
+    // Called at the end of a frame while FramePending, with that frame's image.
+    public void SendFrame(Texture2D frame)
+    {
+        FramePending = false;
+        int w = frame.width, h = frame.height;
+        var px = frame.GetPixels32();
+        var data = new byte[12 + w * h * 3];
+        Put(data, 0, 8 + w * h * 3);
+        Put(data, 4, w);
+        Put(data, 8, h);
+        int o = 12;
+        for (int y = h - 1; y >= 0; y--) // Unity's rows run bottom-up
+            for (int x = y * w, end = x + w; x < end; x++)
+            {
+                data[o++] = px[x].r;
+                data[o++] = px[x].g;
+                data[o++] = px[x].b;
+            }
+        try { client.Send(data); }
+        catch (Exception e) { EndSession(e); }
+    }
+
+    void EndSession(Exception e)
+    {
+        log.LogWarning(e is EndOfStreamException || e is SocketException
+            ? $"bridge client left: {e.Message}" : $"bridge error: {e}");
+        client.Close();
+        client = null;
+        Application.Quit();
     }
 
     void Read(int n)
@@ -114,21 +150,21 @@ class Server
 
     void SendInt(int v)
     {
-        Put(4, v);
+        Put(output, 4, v);
         Send(4);
     }
 
     void Send(int payloadBytes)
     {
-        Put(0, payloadBytes);
+        Put(output, 0, payloadBytes);
         client.Send(output, 0, 4 + payloadBytes, SocketFlags.None);
     }
 
-    void Put(int offset, int v)
+    static void Put(byte[] buffer, int offset, int v)
     {
-        output[offset] = (byte)v;
-        output[offset + 1] = (byte)(v >> 8);
-        output[offset + 2] = (byte)(v >> 16);
-        output[offset + 3] = (byte)(v >> 24);
+        buffer[offset] = (byte)v;
+        buffer[offset + 1] = (byte)(v >> 8);
+        buffer[offset + 2] = (byte)(v >> 16);
+        buffer[offset + 3] = (byte)(v >> 24);
     }
 }

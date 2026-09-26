@@ -17,6 +17,7 @@
     <Reference Include="UnityEngine.CoreModule" HintPath="$(Managed)\UnityEngine.CoreModule.dll" Private="false" />
     <Reference Include="UnityEngine.Physics2DModule" HintPath="$(Managed)\UnityEngine.Physics2DModule.dll" Private="false" />
     <Reference Include="UnityEngine.PhysicsModule" HintPath="$(Managed)\UnityEngine.PhysicsModule.dll" Private="false" />
+    <Reference Include="UnityEngine.ScreenCaptureModule" HintPath="$(Managed)\UnityEngine.ScreenCaptureModule.dll" Private="false" />
   </ItemGroup>
 
   <Target Name="CheckGameDir" BeforeTargets="ResolveAssemblyReferences">

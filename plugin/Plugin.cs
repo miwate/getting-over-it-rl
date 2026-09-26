@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -33,7 +34,22 @@ public class Plugin : BaseUnityPlugin
         int patched = Harmony.CreateAndPatchAll(typeof(Patches)).GetPatchedMethods().Count();
         Logger.LogInfo($"RL mode: {patched} methods patched");
         server = new Server(IntArg("-goi-port", 5555), Logger);
+        StartCoroutine(AnswerFrameRequests());
         SceneManager.sceneLoaded += (scene, _) => { if (scene.name == "Mian") game = new Game(); }; // before Start(): authored start pose
+    }
+
+    // A frame can only be read once rendering has finished, so frame requests are answered at the end of the frame.
+    IEnumerator AnswerFrameRequests()
+    {
+        var endOfFrame = new WaitForEndOfFrame();
+        while (true)
+        {
+            yield return endOfFrame;
+            if (!server.FramePending) continue;
+            var frame = ScreenCapture.CaptureScreenshotAsTexture();
+            server.SendFrame(frame);
+            Destroy(frame);
+        }
     }
 
     void Update()
