@@ -80,7 +80,8 @@ class ProgressLog(BaseCallback):
         if episodes:
             self.record = max(self.record, *(ep["best_progress"] for ep in episodes))
             self.logger.record("rollout/best_progress_record", self.record)
-        bottom = [ep["best_progress"] for ep in episodes if ep["from_bottom"]]
+        # A resumed checkpoint brings its earlier episodes, from before saved starts: all from the bottom.
+        bottom = [ep["best_progress"] for ep in episodes if ep.get("from_bottom", 1)]
         if bottom:
             self.logger.record("rollout/best_progress_mean", sum(bottom) / len(bottom))
 
