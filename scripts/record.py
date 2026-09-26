@@ -1,4 +1,7 @@
-"""Record a video of one rollout of a trained policy (deterministic actions), from the game's own frames."""
+"""Record a video of one rollout of a trained policy, from the game's own frames.
+
+Actions are sampled, as in training: the mean action alone can settle into a pose it never leaves.
+"""
 import argparse
 import os
 
@@ -19,6 +22,7 @@ def main():
     ap.add_argument("--seconds", type=float, default=60, help="game time to record")
     ap.add_argument("--k", type=int, default=4, help="physics steps per action; must match training")
     ap.add_argument("--colliders", action="store_true", help="draw the physics shapes over the game")
+    ap.add_argument("--deterministic", action="store_true", help="play the mean action instead of sampling")
     args = ap.parse_args()
     if not args.game_dir:
         ap.error("pass --game-dir or set GOI_GAME_DIR")
@@ -36,7 +40,7 @@ def main():
         with imageio.get_writer(out, fps=fps) as video:
             video.append_data(env.render())
             while True:
-                action, _ = model.predict(obs, deterministic=True)
+                action, _ = model.predict(obs, deterministic=args.deterministic)
                 obs, _, done, infos = env.step(action)
                 if done[0]:
                     break
