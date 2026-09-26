@@ -13,7 +13,8 @@ using Object = UnityEngine.Object;
 // callbacks to disabled scripts, so their contact bookkeeping keeps working. Replays from a snapshot are bit-exact.
 class Game
 {
-    public const int ObsFields = 16; // layout: OBS_FIELDS in goi_env/client.py, then RayCount ray distances
+    public const int ObsFields = 22; // layout: OBS_FIELDS in goi_env/client.py, then RayCount ray distances
+    static readonly float[] Ahead = { 2f, 5f, 10f }; // route points observed, in distance along the route past the pot
     public int K = 4;                // physics steps per action
     public int RayCount = 16;
     public float RayLength = 10f;
@@ -40,7 +41,8 @@ class Game
     readonly PoseControl pose;
     readonly ContactFilter2D solid;
     readonly Snapshot start;
-    readonly Dictionary<int, Snapshot> saves = new Dictionary<int, Snapshot>(); // ponytail: never freed (~1 KB each); add a drop command if a run saves millions
+    readonly Dictionary<int, Snapshot> saves = new Dictionary<int, Snapshot>(); // ~1 KB each, until dropped
+    int nextSave;
     Camera[] cameras;
     Scene worldScene;
     PhysicsScene2D world;
@@ -138,7 +140,14 @@ class Game
         o[12] = pot.IsTouching(solid) ? 1 : 0;
         o[13] = lake.resetting ? 1 : 0;
         o[14] = Patches.Won ? 1 : 0;
-        o[15] = route.TFToDistance(route.GetNearestPointTF(player.transform.position)); // ProgressMeter.progress, current
+        float along = route.TFToDistance(route.GetNearestPointTF(player.transform.position)); // ProgressMeter.progress, current
+        o[15] = along;
+        for (int i = 0; i < Ahead.Length; i++) // where the route goes next, relative to the pot
+        {
+            Vector2 q = route.Interpolate(route.DistanceToTF(along + Ahead[i])); // LevelSpline sits at the origin, unrotated
+            o[16 + 2 * i] = q.x - p.x;
+            o[17 + 2 * i] = q.y - p.y;
+        }
         for (int i = 0; i < RayCount; i++)
         {
             float a = 2 * Mathf.PI * i / RayCount;
@@ -152,10 +161,12 @@ class Game
 
     public int Save()
     {
-        int id = saves.Count;
+        int id = nextSave++;
         saves[id] = Capture();
         return id;
     }
+
+    public void Drop(int id) => saves.Remove(id);
 
     public bool Load(int id)
     {

@@ -11,6 +11,7 @@ using UnityEngine;
 //   'k' configure(int k, int rays, float rayLength, int render, int width, int height) -> int obs length
 //   'r' reset -> obs            's' step(float dx, float dy) -> obs            'v' save_state -> int id
 //   'l' load_state(int id) -> obs, or empty for an unknown id                 'c' close -> empty, then the game quits
+//   'd' drop_state(int id) -> empty: frees a saved state
 //   'f' frame -> int width, int height, then RGB rows top-down: the image rendered after the last step (render on)
 class Server
 {
@@ -78,6 +79,11 @@ class Server
                         Read(4);
                         if (game.Load(Int(0))) SendObs(game);
                         else Send(0);
+                        break;
+                    case 'd':
+                        Read(4);
+                        game.Drop(Int(0));
+                        Send(0);
                         break;
                     case 'c':
                         Send(0);

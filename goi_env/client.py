@@ -19,6 +19,7 @@ OBS_FIELDS = (
     "hammer_cos", "hammer_sin", "hammer_angvel", "hammer_ext", "hammer_extvel",
     "head_contact", "pot_contact", "fell_in_lake", "won",  # 0/1 flags
     "progress",  # distance along the level route to the point nearest the pot (the game's ProgressMeter)
+    "ahead2_dx", "ahead2_dy", "ahead5_dx", "ahead5_dy", "ahead10_dx", "ahead10_dy",  # route 2/5/10 further on, from the pot
 )
 
 
@@ -111,6 +112,10 @@ class GoiClient:
             raise KeyError(f"unknown state id {state_id}")
         return obs
 
+    def drop_state(self, state_id):
+        """Free a saved state in the game (each holds ~1 KB there until dropped)."""
+        self._call(b"d" + struct.pack("<i", state_id))
+
     def frame(self):
         """The image rendered after the last step (needs render=True): width, height, RGB bytes with rows top-down."""
         data = self._call(b"f")
@@ -192,6 +197,12 @@ def _smoke_test():
         print(f"100 steps, replay with rendering on ({rate:.0f} steps/s) vs off: max diff {worst(replay1, replay3):.3g}")
         print(f"100 steps, uninterrupted original vs replay after load: max diff {worst(original, replay1):.3g} "
               "(a load rebuilds the physics world, so these need not match)")
+        c.drop_state(sid)
+        try:
+            c.load_state(sid)
+            print("drop_state: FAILED, the state still loads")
+        except KeyError:
+            print("drop_state: the state is gone")
         c.close()
         if proc:
             proc.wait(timeout=30)
