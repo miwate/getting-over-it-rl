@@ -18,6 +18,7 @@ OBS_FIELDS = (
     "pot_x", "pot_y", "pot_vx", "pot_vy", "pot_angle", "pot_angvel",  # world units, radians
     "hammer_cos", "hammer_sin", "hammer_angvel", "hammer_ext", "hammer_extvel",
     "head_contact", "pot_contact", "fell_in_lake", "won",  # 0/1 flags
+    "progress",  # distance along the level route to the point nearest the pot (the game's ProgressMeter)
 )
 
 

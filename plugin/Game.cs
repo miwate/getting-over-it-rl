@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using FluffyUnderware.Curvy;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using Object = UnityEngine.Object;
@@ -12,7 +13,7 @@ using Object = UnityEngine.Object;
 // callbacks to disabled scripts, so their contact bookkeeping keeps working. Replays from a snapshot are bit-exact.
 class Game
 {
-    public const int ObsFields = 15; // layout: OBS_FIELDS in goi_env/client.py, then RayCount ray distances
+    public const int ObsFields = 16; // layout: OBS_FIELDS in goi_env/client.py, then RayCount ray distances
     public int K = 4;                // physics steps per action
     public int RayCount = 16;
     public float RayLength = 10f;
@@ -29,6 +30,7 @@ class Game
     readonly OpenGift gift;
     readonly CameraControl cam;
     readonly CraneMove craneMove;
+    readonly CurvySpline route; // the level route ProgressMeter measures progress along
     readonly Rigidbody2D pot, hub, arm, tip, cursor, crane;
     readonly Vector2 craneStart;
     readonly Rigidbody2D[] bodies;       // every body in the level, in a fixed order
@@ -64,6 +66,7 @@ class Game
         cam = Object.FindObjectOfType<CameraControl>();
         craneMove = Object.FindObjectOfType<CraneMove>();
         crane = craneMove.GetComponent<Rigidbody2D>();
+        route = Object.FindObjectOfType<ProgressMeter>().GetComponent<CurvySpline>();
         craneStart = crane.position;
         bodies = InLevel<Rigidbody2D>();
         gift = InLevel<OpenGift>().Single(); // inactive until the gift spawns
@@ -132,6 +135,7 @@ class Game
         o[12] = pot.IsTouching(solid) ? 1 : 0;
         o[13] = lake.resetting ? 1 : 0;
         o[14] = Patches.Won ? 1 : 0;
+        o[15] = route.TFToDistance(route.GetNearestPointTF(player.transform.position)); // ProgressMeter.progress, current
         for (int i = 0; i < RayCount; i++)
         {
             float a = 2 * Mathf.PI * i / RayCount;
