@@ -65,7 +65,9 @@ def main():
             model = PPO.load(args.resume, env=venv, device="cpu", tensorboard_log=run_dir)
         else:
             venv = VecNormalize(venv, gamma=0.995)
-            model = PPO("MlpPolicy", venv, n_steps=1024, batch_size=512, gamma=0.995,
+            # target_kl: stop each update's epochs early once the policy has moved enough. Without it, action noise
+            # collapsed (std 0.55 -> 0.03), updates grew (KL > 1) and performance regressed after ~1M steps.
+            model = PPO("MlpPolicy", venv, n_steps=1024, batch_size=512, gamma=0.995, target_kl=0.02,
                         policy_kwargs=dict(net_arch=[256, 256]), device="cpu", tensorboard_log=run_dir, verbose=1)
         save = CheckpointCallback(max(args.save_every // args.envs, 1), checkpoints, name_prefix="ppo",
                                   save_vecnormalize=True)
