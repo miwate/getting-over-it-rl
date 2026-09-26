@@ -17,7 +17,7 @@ from goi_env import OBS_FIELDS, GoiEnv
 
 PROGRESS, HEAD, POT = (OBS_FIELDS.index(f) for f in ("progress", "head_contact", "pot_contact"))
 GAP = -1  # the env's last observation field: how far the pot is behind the episode's progress record
-GAMMA = 0.995
+GAMMA = 0.998  # rewards ~17 s ahead still count: a fall can cost far more time than 0.995's ~7 s horizon sees
 
 
 class Starts(gym.Wrapper):
@@ -162,8 +162,13 @@ def main():
             venv = VecNormalize(venv, gamma=GAMMA)
             # target_kl: stop each update's epochs early once the policy has moved enough. Without it, action noise
             # collapsed (std 0.55 -> 0.03), updates grew (KL > 1) and performance regressed after ~1M steps.
-            model = PPO("MlpPolicy", venv, n_steps=1024, batch_size=512, gamma=GAMMA, target_kl=0.02,
-                        policy_kwargs=dict(net_arch=[256, 256]), device="cpu", tensorboard_log=run_dir, verbose=1)
+            # learning_rate: at 3e-4 every update hit target_kl, 45% within the first epoch, wasting rollout data.
+            # gSDE: exploration noise that varies smoothly with the state (resampled every 4 steps) instead of per-step
+            # jitter, which suits physical control; log_std_init as in the RL Zoo's gSDE settings.
+            model = PPO("MlpPolicy", venv, learning_rate=1e-4, n_steps=1024, batch_size=512, gamma=GAMMA,
+                        target_kl=0.02, use_sde=True, sde_sample_freq=4,
+                        policy_kwargs=dict(net_arch=[256, 256], log_std_init=-2), device="cpu",
+                        tensorboard_log=run_dir, verbose=1)
         save = CheckpointCallback(max(args.save_every // args.envs, 1), checkpoints, name_prefix="ppo",
                                   save_vecnormalize=True)
         try:
