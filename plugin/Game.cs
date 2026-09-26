@@ -71,7 +71,7 @@ class Game
             .Where(r => r.GetComponentInChildren<Collider2D>(true) != null || r.GetComponentInChildren<Rigidbody2D>(true) != null).ToArray();
         var withPhysics = InLevel<Collider2D>().Select(c => c.gameObject).Concat(bodies.Select(b => b.gameObject)).Distinct().ToArray();
         physicsObjects = withPhysics.Where(g => !withPhysics.Any(a => a != g && g.transform.IsChildOf(a.transform)))
-            .OrderBy(g => EngineDump.PathOf(g.transform), StringComparer.Ordinal).ToArray();
+            .OrderBy(g => HierarchyKey(g.transform), StringComparer.Ordinal).ToArray();
         pose = player.GetComponentInChildren<PoseControl>();
         hammerFixedUpdate = Method(hammer, "FixedUpdate");
         potFixedUpdate = Method(potSounds, "FixedUpdate");
@@ -169,13 +169,14 @@ class Game
         int n = bodies.Length;
         var s = new Snapshot
         {
-            pos = new Vector2[n], vel = new Vector2[n], rot = new float[n], spin = new float[n],
+            pos = new Vector2[n], vel = new Vector2[n], rot = new float[n], spin = new float[n], z = new float[n],
             active = new bool[n], awake = new bool[n], type = new RigidbodyType2D[n],
         };
         for (int i = 0; i < n; i++)
         {
             var b = bodies[i];
             s.pos[i] = b.position; s.vel[i] = b.velocity; s.rot[i] = b.rotation; s.spin[i] = b.angularVelocity;
+            s.z[i] = b.transform.position.z;
             s.active[i] = b.gameObject.activeSelf; s.awake[i] = b.IsAwake(); s.type[i] = b.bodyType;
         }
         s.gravity = Physics2D.gravity;
@@ -211,9 +212,11 @@ class Game
             if (bodies[i].gameObject.activeSelf != s.active[i]) bodies[i].gameObject.SetActive(s.active[i]);
         var active = physicsObjects.Select(g => g.activeSelf).ToArray();
         foreach (var g in physicsObjects) g.SetActive(false);
-        for (int i = 0; i < bodies.Length; i++) // saved poses before re-creation; parents sort before children
+        // Saved poses before re-creation, parents before children. Depth too: it isn't 2D physics, but Unity bakes the
+        // full 3D Transform into shapes and mass properties, and the pose script moves the Hub's depth with the animation.
+        for (int i = 0; i < bodies.Length; i++)
             bodies[i].transform.SetPositionAndRotation(
-                new Vector3(s.pos[i].x, s.pos[i].y, bodies[i].transform.position.z), Quaternion.Euler(0, 0, s.rot[i]));
+                new Vector3(s.pos[i].x, s.pos[i].y, s.z[i]), Quaternion.Euler(0, 0, s.rot[i]));
         var fresh = SceneManager.CreateScene($"goi-physics-{++generation}", new CreateSceneParameters(LocalPhysicsMode.Physics2D));
         foreach (var root in physicsRoots) SceneManager.MoveGameObjectToScene(root, fresh);
         for (int i = 0; i < physicsObjects.Length; i++) physicsObjects[i].SetActive(active[i]); // fixed creation order
@@ -276,7 +279,12 @@ class Game
 
     T[] InLevel<T>() where T : Component =>
         Resources.FindObjectsOfTypeAll<T>().Where(x => x.gameObject.scene == player.scene)
-            .OrderBy(x => EngineDump.PathOf(x.transform), StringComparer.Ordinal).ToArray();
+            .OrderBy(x => HierarchyKey(x.transform), StringComparer.Ordinal).ToArray();
+
+    // Position in the scene hierarchy (sibling indices from the root): unique and the same in every session, unlike
+    // names (the level has same-named siblings, which would fall back to Unity's session-dependent object order).
+    static string HierarchyKey(Transform t) =>
+        (t.parent == null ? "" : HierarchyKey(t.parent) + "/") + t.GetSiblingIndex().ToString("D5");
 
     static Action Method(object script, string name) => (Action)Delegate.CreateDelegate(typeof(Action), script,
         script.GetType().GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic));
@@ -284,7 +292,7 @@ class Game
     class Snapshot
     {
         public Vector2[] pos, vel;
-        public float[] rot, spin;
+        public float[] rot, spin, z;
         public bool[] active, awake;
         public RigidbodyType2D[] type;
         public Vector2 gravity, mw;
