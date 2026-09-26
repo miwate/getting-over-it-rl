@@ -125,7 +125,12 @@ class Game
             if (lake.resetting) lake.CancelInvoke(); // fell in the lake: the flag ends the episode; the game's own reset must not fire
             if (Render) cam.FixedUpdate();           // the camera follows on sim time
         }
-        poseLateUpdate(); // the character's arm pose, once per action in every mode, so rendering never changes the physics
+        // The character's arm pose, once per action in every mode, so rendering never changes the physics. It also puts the
+        // hammer at the depth of the animated right hand, which follows frame time, and a moved Transform re-syncs the
+        // hammer's bodies: keep their depth fixed, so the physics can't see the animation.
+        var hubAt = hub.transform.position;
+        poseLateUpdate();
+        hub.transform.position = hubAt;
     }
 
     public int Observe(float[] o)
