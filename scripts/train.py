@@ -101,6 +101,13 @@ def make_env(game_dir, k, episode_steps, stall_steps, saved_starts, rewinds):
     return TimeLimit(env, episode_steps)
 
 
+def explore(model, step):
+    """Re-draw gSDE exploration noise the way training does: every sde_sample_freq steps (or once per episode if
+    that's -1). predict() alone never re-draws it, which turns a gSDE policy deterministic in a fixed, random way."""
+    if model.use_sde and (step == 0 or model.sde_sample_freq > 0 and step % model.sde_sample_freq == 0):
+        model.policy.reset_noise(1)
+
+
 def vecnormalize_path(checkpoint):
     """The observation/reward normalization stats saved next to a checkpoint."""
     return re.sub(r"ppo_(\d+)_steps\.zip$", r"ppo_vecnormalize_\1_steps.pkl", checkpoint)

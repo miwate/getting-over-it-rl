@@ -10,7 +10,7 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 from goi_env import GoiEnv
-from train import vecnormalize_path
+from train import explore, vecnormalize_path
 
 
 def play(checkpoint, game_dir, k, steps, episodes, seed):
@@ -19,13 +19,16 @@ def play(checkpoint, game_dir, k, steps, episodes, seed):
     env.training = env.norm_reward = False
     model = PPO.load(checkpoint, device="cpu")
     model.set_random_seed(seed)
-    bests = []
+    bests, step = [], 0
     try:
         obs = env.reset()
         while len(bests) < episodes:
+            explore(model, step)
             obs, _, done, infos = env.step(model.predict(obs, deterministic=False)[0])
+            step += 1
             if done[0]:
                 bests.append(infos[0]["best_progress"])
+                step = 0
     finally:
         env.close()
     return bests

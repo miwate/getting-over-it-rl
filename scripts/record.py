@@ -11,7 +11,7 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 from goi_env import GoiEnv
-from train import vecnormalize_path
+from train import explore, vecnormalize_path
 
 
 def main():
@@ -39,7 +39,11 @@ def main():
         obs = env.reset()
         with imageio.get_writer(out, fps=fps) as video:
             video.append_data(env.render())
+            step = 0
             while True:
+                if not args.deterministic:
+                    explore(model, step)
+                step += 1
                 action, _ = model.predict(obs, deterministic=args.deterministic)
                 obs, _, done, infos = env.step(action)
                 if done[0]:
