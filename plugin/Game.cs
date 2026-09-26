@@ -174,6 +174,7 @@ class Game
         var s = new Snapshot
         {
             pos = new Vector2[n], vel = new Vector2[n], rot = new float[n], spin = new float[n], z = new float[n],
+            pose = new Quaternion[n],
             active = new bool[n], awake = new bool[n], type = new RigidbodyType2D[n],
         };
         for (int i = 0; i < n; i++)
@@ -181,6 +182,7 @@ class Game
             var b = bodies[i];
             s.pos[i] = b.position; s.vel[i] = b.velocity; s.rot[i] = b.rotation; s.spin[i] = b.angularVelocity;
             s.z[i] = b.transform.position.z;
+            s.pose[i] = b.transform.rotation;
             s.active[i] = b.gameObject.activeSelf; s.awake[i] = b.IsAwake(); s.type[i] = b.bodyType;
         }
         s.gravity = Physics2D.gravity;
@@ -218,9 +220,10 @@ class Game
         foreach (var g in physicsObjects) g.SetActive(false);
         // Saved poses before re-creation, parents before children. Depth too: it isn't 2D physics, but Unity bakes the
         // full 3D Transform into shapes and mass properties, and the pose script moves the Hub's depth with the animation.
+        // The full 3D rotation too: the hammer's Handle and Tip are authored tilted out of the screen plane (the two
+        // tilts cancel at the Tip), and the hammer mesh and grip points hang under them.
         for (int i = 0; i < bodies.Length; i++)
-            bodies[i].transform.SetPositionAndRotation(
-                new Vector3(s.pos[i].x, s.pos[i].y, s.z[i]), Quaternion.Euler(0, 0, s.rot[i]));
+            bodies[i].transform.SetPositionAndRotation(new Vector3(s.pos[i].x, s.pos[i].y, s.z[i]), s.pose[i]);
         var fresh = SceneManager.CreateScene($"goi-physics-{++generation}", new CreateSceneParameters(LocalPhysicsMode.Physics2D));
         foreach (var root in physicsRoots) SceneManager.MoveGameObjectToScene(root, fresh);
         for (int i = 0; i < physicsObjects.Length; i++) physicsObjects[i].SetActive(active[i]); // fixed creation order
@@ -297,6 +300,7 @@ class Game
     {
         public Vector2[] pos, vel;
         public float[] rot, spin, z;
+        public Quaternion[] pose; // Transform rotation; rot is the physics angle
         public bool[] active, awake;
         public RigidbodyType2D[] type;
         public Vector2 gravity, mw;
