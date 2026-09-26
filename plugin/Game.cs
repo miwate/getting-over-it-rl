@@ -93,6 +93,8 @@ class Game
         if (!pc.loadFinished) return false;
         pc.enabled = hammer.enabled = potSounds.enabled = craneMove.enabled = false;
         pose.enabled = false; // its per-frame write to Player/Hub's Transform nudges the bodies; Step() runs it instead
+        pose.anim.enabled = false; // visual only: its own per-frame update would undo the pose script's hands-on-handle IK
+        cam.enabled = false;       // visual only: a camera spring on Unity's clock trails a game that runs faster than real time
         player.GetComponent<Saviour>().enabled = false;  // autosave
         foreach (var j in InLevel<AnchoredJoint2D>()) j.autoConfigureConnectedAnchor = false; // re-created joints keep their anchors
         Physics2D.simulationMode = SimulationMode2D.Script;
@@ -119,6 +121,7 @@ class Game
             crane.MovePosition(new Vector2(craneStart.x + Mathf.Sin(simTime) * 0.01f, craneStart.y)); // CraneMove, on sim time
             if (!world.Simulate(dt)) throw new InvalidOperationException("PhysicsScene2D.Simulate did not run");
             if (lake.resetting) lake.CancelInvoke(); // fell in the lake: the flag ends the episode; the game's own reset must not fire
+            if (Render) cam.FixedUpdate();           // the camera follows on sim time
         }
         poseLateUpdate(); // the character's arm pose, once per action in every mode, so rendering never changes the physics
     }
