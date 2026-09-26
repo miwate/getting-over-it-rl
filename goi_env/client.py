@@ -6,6 +6,7 @@ Smoke test (stdlib only; launches the game, exercises every command, then quits 
 import socket
 import struct
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -17,11 +18,31 @@ OBS_FIELDS = (
 )
 
 
+_launch_lock = threading.Lock()
+_last_launch = 0.0
+
+
+def free_port():
+    """A localhost TCP port nothing is listening on right now (other software may own fixed ones)."""
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
 def launch(game_dir, port=5555, width=640, height=360):
-    """Start the game in RL mode; returns the Popen handle."""
-    exe = Path(game_dir) / "GettingOverIt.exe"
-    return subprocess.Popen([str(exe), "-goi-rl", "-goi-port", str(port), "-screen-fullscreen", "0",
-                             "-screen-width", str(width), "-screen-height", str(height)], cwd=game_dir)
+    """Start the game in RL mode; returns the Popen handle.
+
+    Launches are spaced 2 s apart: BepInEx rewrites its shared config file as each game starts, and games that
+    start together can collide on it and come up without the mod.
+    """
+    global _last_launch
+    # ponytail: spacing is per Python process; launchers in several processes need their own (e.g. sleep by rank)
+    with _launch_lock:
+        time.sleep(max(0.0, _last_launch + 2.0 - time.monotonic()))
+        _last_launch = time.monotonic()
+        exe = Path(game_dir) / "GettingOverIt.exe"
+        return subprocess.Popen([str(exe), "-goi-rl", "-goi-port", str(port), "-screen-fullscreen", "0",
+                                 "-screen-width", str(width), "-screen-height", str(height)], cwd=game_dir)
 
 
 class GoiClient:
@@ -31,14 +52,16 @@ class GoiClient:
     """
 
     def __init__(self, port=5555, timeout=180.0, **config):
-        deadline = time.monotonic() + timeout
-        while True:  # the game takes a while to start listening
+        deadline = time.monotonic() + 60
+        while True:  # the bridge starts listening a few seconds after launch
             try:
                 self.sock = socket.create_connection(("127.0.0.1", port), timeout=5)
                 break
-            except OSError:
+            except OSError as e:
                 if time.monotonic() > deadline:
-                    raise
+                    raise ConnectionError(
+                        f"no bridge on port {port} after 60 s. Is the game running with -goi-rl? With BepInEx's "
+                        "default disk logging, at most 5 modded games can run from one install at a time.") from e
                 time.sleep(0.5)
         self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         self.sock.settimeout(timeout)  # the first reply waits for the level to load
@@ -103,15 +126,16 @@ def _smoke_test():
 
     ap = argparse.ArgumentParser(description="Launch the game in RL mode and exercise every bridge command.")
     ap.add_argument("--game-dir", default=os.environ.get("GOI_GAME_DIR"), help="install folder (or set GOI_GAME_DIR)")
-    ap.add_argument("--port", type=int, default=5555)
+    ap.add_argument("--port", type=int, help="default: a free port, or 5555 with --no-launch")
     ap.add_argument("--no-launch", action="store_true", help="connect to a game that is already running")
     args = ap.parse_args()
     if not args.no_launch and not args.game_dir:
         ap.error("pass --game-dir or set GOI_GAME_DIR")
 
-    proc = None if args.no_launch else launch(args.game_dir, args.port)
+    port = args.port or (5555 if args.no_launch else free_port())
+    proc = None if args.no_launch else launch(args.game_dir, port)
     try:
-        c = GoiClient(port=args.port)
+        c = GoiClient(port=port)
         obs = c.reset()
         print("reset:", {f: round(v, 3) for f, v in zip(OBS_FIELDS, obs)})
         print("rays:", [round(r, 2) for r in obs[len(OBS_FIELDS):]])
