@@ -173,9 +173,13 @@ def main():
             # learning_rate: at 3e-4 every update hit target_kl, 45% within the first epoch, wasting rollout data.
             # gSDE: exploration noise that varies smoothly with the state (resampled every 4 steps) instead of per-step
             # jitter, which suits physical control; log_std_init as in the RL Zoo's gSDE settings.
-            model = PPO("MlpPolicy", venv, learning_rate=1e-4, n_steps=1024, batch_size=512, gamma=GAMMA,
+            # squash_output: tanh keeps actions inside [-1, 1]. With clipping instead, progress-4's mean action drifted
+            # to ~4.5 (99% of actions clipped): exploration died and the hammer was always shoved at full force.
+            # n_steps 512 with 10 games: 5,120 steps per update. Updates stop at target_kl after ~2 epochs anyway, so
+            # learning is paced by the number of updates, not by samples per update.
+            model = PPO("MlpPolicy", venv, learning_rate=1e-4, n_steps=512, batch_size=512, gamma=GAMMA,
                         target_kl=0.02, use_sde=True, sde_sample_freq=4,
-                        policy_kwargs=dict(net_arch=[256, 256], log_std_init=-2), device="cpu",
+                        policy_kwargs=dict(net_arch=[256, 256], log_std_init=-2, squash_output=True), device="cpu",
                         tensorboard_log=run_dir, verbose=1)
         save = CheckpointCallback(max(args.save_every // args.envs, 1), checkpoints, name_prefix="ppo",
                                   save_vecnormalize=True)
