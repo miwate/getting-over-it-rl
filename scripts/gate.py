@@ -1,0 +1,126 @@
+"""Chimney-top benchmark, the judge for training at the frontier: from the same states just below the big rock's
+top-left corner (route progress >= 176), how often does a policy get onto the rock (190) within 15 s?
+
+A finder policy plays from the bottom with fixed seeds until it gets there, and that state is every candidate's start.
+One process per game with seeded noise, so every run rebuilds the same states (the bridge is bit-exact). Keep a
+candidate only if it beats rw-control (ported: scripts/port.py) here without losing ground in full games (evaluate.py).
+
+    python scripts/gate.py runs/rw-port/checkpoints/ppo_1500160_steps.zip other.zip other.zip@1
+"""
+import argparse
+import os
+import pickle
+from concurrent.futures import ProcessPoolExecutor
+from itertools import repeat
+
+import torch
+from stable_baselines3 import PPO
+
+from goi_env import OBS_FIELDS, GoiEnv
+from train import act, vecnormalize_path
+
+PROGRESS = OBS_FIELDS.index("progress")
+
+
+class Player:
+    """A checkpoint, its observation normalization and an exploration noise scale."""
+
+    def __init__(self, checkpoint, noise):
+        self.model = PPO.load(checkpoint, device="cpu")
+        with open(vecnormalize_path(checkpoint), "rb") as f:
+            self.norm = pickle.load(f)
+        self.noise = noise
+
+    def __call__(self, obs, step):
+        return act(self.model, self.norm.normalize_obs(obs[None]), step, self.noise)[0]
+
+
+def find_gate(game, finder, start, steps):
+    """Play from the bottom (up to three games of `steps`) until progress >= start; returns that state or None."""
+    for _ in range(3):
+        obs, _ = game.reset()
+        for step in range(steps):
+            obs, _, terminated, _, _ = game.step(finder(obs, step))
+            if obs[PROGRESS] >= start:
+                return game.save_state()
+            if terminated:
+                break
+    return None
+
+
+def crosses(game, player, gate, steps, goal):
+    obs = game.load_state(gate)
+    for step in range(steps):
+        obs, _, terminated, _, _ = game.step(player(obs, step))
+        if obs[PROGRESS] >= goal:
+            return True
+        if terminated:
+            return False
+    return False
+
+
+def bench(seeds, candidates, args):
+    """One game: a gate state per seed, then every candidate's tries from it. Returns {seed: [wins per candidate]}."""
+    torch.set_num_threads(1)
+    finder = Player(args.finder, args.finder_noise)
+    players = [Player(path, noise) for path, noise in candidates]
+    game = GoiEnv(args.game_dir, k=args.k)
+    steps = int(args.seconds * 120 / args.k)
+    out = {}
+    try:
+        for seed in seeds:
+            torch.manual_seed(seed)
+            gate = find_gate(game, finder, args.start, int(100 * 120 / args.k))
+            if gate is None:
+                continue
+            out[seed] = []
+            for player in players:
+                wins = 0
+                for i in range(args.tries):
+                    torch.manual_seed(seed * 1000 + i)
+                    wins += crosses(game, player, gate, steps, args.goal)
+                out[seed].append(wins)
+            game.drop_state(gate)
+    finally:
+        game.close()
+    return out
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("candidates", nargs="+", help="checkpoint .zip files; append @<noise> to override --noise for one")
+    ap.add_argument("--game-dir", default=os.environ.get("GOI_GAME_DIR"), help="install folder (or set GOI_GAME_DIR)")
+    ap.add_argument("--finder", default=os.path.join("runs", "rw-port", "checkpoints", "ppo_1500160_steps.zip"),
+                    help="the policy that plays up to the gate states (rw-control, ported)")
+    ap.add_argument("--finder-noise", type=float, default=0.5)
+    ap.add_argument("--noise", type=float, default=0.5, help="candidates' exploration noise scale (train.act)")
+    ap.add_argument("--states", type=int, default=16, help="gate states (seeds 0, 1, ...)")
+    ap.add_argument("--tries", type=int, default=20, help="tries per state and candidate")
+    ap.add_argument("--seconds", type=float, default=15, help="game time per try")
+    ap.add_argument("--start", type=float, default=176, help="route progress of the gate states")
+    ap.add_argument("--goal", type=float, default=190, help="route progress that counts as crossing")
+    ap.add_argument("--games", type=int, default=8, help="games in parallel")
+    ap.add_argument("--k", type=int, default=4, help="physics steps per action; must match training")
+    args = ap.parse_args()
+    if not args.game_dir:
+        ap.error("pass --game-dir or set GOI_GAME_DIR")
+
+    candidates = [(c.rpartition("@")[0], float(c.rpartition("@")[2])) if "@" in c else (c, args.noise)
+                  for c in args.candidates]
+    games = min(args.games, args.states)
+    with ProcessPoolExecutor(games) as ex:
+        results = {}
+        for part in ex.map(bench, [range(i, args.states, games) for i in range(games)], repeat(candidates), repeat(args)):
+            results.update(part)
+    seeds = sorted(results)
+    total = args.tries * len(seeds)
+    print(f"{len(seeds)} of {args.states} gate states (progress >= {args.start:.0f}); {args.tries} tries of "
+          f"{args.seconds:.0f} s each; success = reaching {args.goal:.0f}")
+    for c, (path, noise) in enumerate(candidates):
+        wins = [results[s][c] for s in seeds]
+        print(f"  {sum(wins):4d}/{total} = {sum(wins) / max(total, 1):4.0%}  noise {noise:<4g} {path}")
+        print(f"        per state: {' '.join(map(str, wins))}")
+
+
+if __name__ == "__main__":
+    main()
