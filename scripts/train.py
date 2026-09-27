@@ -8,6 +8,7 @@ from functools import partial
 
 import gymnasium as gym
 import numpy as np
+import torch
 from gymnasium.wrappers import TimeLimit
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback
@@ -140,6 +141,17 @@ def explore(model, step):
     that's -1). predict() alone never re-draws it, which turns a gSDE policy deterministic in a fixed, random way."""
     if model.use_sde and (step == 0 or model.sde_sample_freq > 0 and step % model.sde_sample_freq == 0):
         model.policy.reset_noise(1)
+
+
+def act(model, obs, step, noise=1.0):
+    """The action at an episode's `step` for one game's normalized observation: the mean action plus `noise` times the
+    exploration noise (1: as in training, 0: the mean alone), clipped to [-1, 1]. rw-control plays best at 0.5: the
+    noise it trained with blurs the moves it knows, and the mean alone freezes at the chimney top (docs/RECON.md)."""
+    explore(model, step)
+    with torch.no_grad():
+        dist = model.policy.get_distribution(model.policy.obs_to_tensor(obs)[0])
+        mean = dist.distribution.mean
+        return np.clip((mean + noise * (dist.get_actions() - mean)).cpu().numpy(), -1, 1)
 
 
 def warm_start(model, checkpoint):

@@ -1,6 +1,7 @@
 """Record a video of one rollout of a trained policy, from the game's own frames.
 
-Actions are sampled, as in training: the mean action alone can settle into a pose it never leaves.
+Actions are the mean plus half the exploration noise (--noise, train.act): the mean alone can settle into a pose it
+never leaves, and the full noise it trained with blurs the moves it knows.
 """
 import argparse
 import os
@@ -11,7 +12,7 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 from goi_env import GoiEnv
-from train import explore, vecnormalize_path
+from train import act, vecnormalize_path
 
 
 def main():
@@ -22,7 +23,7 @@ def main():
     ap.add_argument("--seconds", type=float, default=60, help="game time to record")
     ap.add_argument("--k", type=int, default=4, help="physics steps per action; must match training")
     ap.add_argument("--colliders", action="store_true", help="draw the physics shapes over the game")
-    ap.add_argument("--deterministic", action="store_true", help="play the mean action instead of sampling")
+    ap.add_argument("--noise", type=float, default=0.5, help="exploration noise scale: 1 as in training, 0 the mean action")
     args = ap.parse_args()
     if not args.game_dir:
         ap.error("pass --game-dir or set GOI_GAME_DIR")
@@ -41,11 +42,8 @@ def main():
             video.append_data(env.render())
             step = 0
             while True:
-                if not args.deterministic:
-                    explore(model, step)
+                obs, _, done, infos = env.step(act(model, obs, step, args.noise))
                 step += 1
-                action, _ = model.predict(obs, deterministic=args.deterministic)
-                obs, _, done, infos = env.step(action)
                 if done[0]:
                     break
                 video.append_data(env.render())
