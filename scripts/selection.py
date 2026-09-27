@@ -6,7 +6,8 @@ crossing").
 Each round, --challengers runs of train.py warm-start from the champion for --steps in parallel, one learning rate each
 from --lrs, with TRAIN_ARGS. Then the champion and the challengers play the same --episodes episodes (new seeds every
 round), scored by mean best progress. runs/<name>/log.jsonl records every round; runs/<name>/champion.txt the champion.
-Ctrl+C stops the round's trainers too (they save a checkpoint) and exits.
+Ctrl+C stops the round's trainers too (they save a checkpoint) and exits. To continue, pass the champion.txt path as
+--champion with the same --name: rounds are numbered on from the log, so earlier checkpoints are never overwritten.
 """
 import argparse
 import json
@@ -59,9 +60,11 @@ def main():
     os.makedirs(root, exist_ok=True)
     lrs = [float(x) for x in args.lrs.split(",")]
     champion = args.champion
+    log_path = os.path.join(root, "log.jsonl")
+    first = sum(1 for _ in open(log_path)) if os.path.exists(log_path) else 0
     procs = []
     try:
-        for r in range(args.rounds):
+        for r in range(first, first + args.rounds):
             procs = []
             for i in range(args.challengers):
                 name = f"{args.name}/r{r:03d}c{i}"
@@ -78,7 +81,7 @@ def main():
             means = {c: float(np.mean(b)) for c, b in results.items()}
             best = max(challengers, key=means.get, default=None)
             promoted = best is not None and means[best] > means[champion] + args.margin
-            with open(os.path.join(root, "log.jsonl"), "a") as log:
+            with open(log_path, "a") as log:
                 log.write(json.dumps({"round": r, "time": time.strftime("%Y-%m-%d %H:%M"), "champion": champion,
                                       "promoted": best if promoted else None,
                                       "scores": {c: {"mean": means[c], "past190": sum(b >= 190 for b in results[c]),
