@@ -1,4 +1,5 @@
 """PPO policies for train.py. In their own module so checkpoints load from any script."""
+import torch
 from stable_baselines3.common.policies import ActorCriticPolicy
 from torch import nn
 
@@ -52,20 +53,23 @@ class ResidualExtractor(nn.Module):
 
 
 class Residual(nn.Module):
-    """x + W2(relu(W1(LayerNorm(x)))), W1 4x wider, as in ResidualMLP."""
+    """x + scale * W2(relu(W1(LayerNorm(x)))), W1 4x wider as in ResidualMLP, with a per-channel scale that starts at 0
+    (LayerScale, Touvron et al., 2021): the block adds nothing until trained, then phases in. A zero W2 instead also adds
+    nothing, but Adam's first steps move all of W2 by the learning rate in the same direction (its inputs are all >= 0):
+    on rw-control that moved the policy 30x past the KL cap in one step."""
 
     def __init__(self, width):
         super().__init__()
         self.f = nn.Sequential(nn.LayerNorm(width), nn.Linear(width, 4 * width), nn.ReLU(), nn.Linear(4 * width, width))
+        self.scale = nn.Parameter(torch.zeros(width))
 
     def forward(self, x):
-        return x + self.f(x)
+        return x + self.scale * self.f(x)
 
 
 class GrownPolicy(BoundedMeanPolicy):
-    """BoundedMeanPolicy whose actor and critic trunks end in `grow` Residual blocks with a zero last layer, which add
-    nothing until training changes them, so a warm start from a 2x256 checkpoint (train.py --grow) behaves exactly as
-    before, with more room to learn."""
+    """BoundedMeanPolicy whose actor and critic trunks end in `grow` Residual blocks, which add nothing until trained,
+    so a warm start from a 2x256 checkpoint (train.py --grow) behaves exactly as before, with more room to learn."""
 
     def __init__(self, *args, grow=2, **kwargs):
         self.grow = grow
@@ -77,13 +81,6 @@ class GrownPolicy(BoundedMeanPolicy):
         for net in (self.mlp_extractor.policy_net, self.mlp_extractor.value_net):
             for _ in range(self.grow):
                 net.append(Residual(width))
-
-    def _build(self, lr_schedule):
-        super()._build(lr_schedule)  # its weight initialization would overwrite a zero set any earlier
-        for net in (self.mlp_extractor.policy_net, self.mlp_extractor.value_net):
-            for block in net[-self.grow:] if self.grow else []:
-                nn.init.zeros_(block.f[-1].weight)
-                nn.init.zeros_(block.f[-1].bias)
 
 
 class BigPolicy(BoundedMeanPolicy):
@@ -99,7 +96,6 @@ class BigPolicy(BoundedMeanPolicy):
 
 if __name__ == "__main__":  # self-check: grown from a 2x256 policy, a GrownPolicy acts and values exactly as it does
     import gymnasium as gym
-    import torch
     obs, act = gym.spaces.Box(-1, 1, (105,)), gym.spaces.Box(-1, 1, (2,))
     kw = dict(net_arch=[256, 256], use_sde=True, log_std_init=-2)
     plain, grown = BoundedMeanPolicy(obs, act, lambda _: 1e-4, **kw), GrownPolicy(obs, act, lambda _: 1e-4, grow=2, **kw)
