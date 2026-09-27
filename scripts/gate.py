@@ -17,7 +17,7 @@ import torch
 from stable_baselines3 import PPO
 
 from goi_env import OBS_FIELDS, GoiEnv
-from train import act, vecnormalize_path
+from train import STALL_SECONDS, act, vecnormalize_path
 
 PROGRESS = OBS_FIELDS.index("progress")
 
@@ -64,7 +64,7 @@ def bench(seeds, candidates, args):
     torch.set_num_threads(1)
     finder = Player(args.finder, args.finder_noise)
     players = [Player(path, noise) for path, noise in candidates]
-    game = GoiEnv(args.game_dir, k=args.k)
+    game = GoiEnv(args.game_dir, k=args.k, stall_steps=int(STALL_SECONDS * 120 / args.k), stall_ends=False)
     steps = int(args.seconds * 120 / args.k)
     out = {}
     try:

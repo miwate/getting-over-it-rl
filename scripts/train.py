@@ -20,6 +20,7 @@ from policy import BigPolicy, BoundedMeanPolicy, GrownPolicy
 
 PROGRESS, HEAD, POT = (OBS_FIELDS.index(f) for f in ("progress", "head_contact", "pot_contact"))
 GAP = -1  # the env's last observation field: how far the pot is behind the episode's progress record
+STALL_SECONDS = 10  # training's cutoff without headway; tests keep its stuck signal (GoiEnv stall_ends=False)
 
 
 class Starts(gym.Wrapper):
@@ -208,7 +209,7 @@ def main():
                     help="games in parallel (at most 5 per install while BepInEx writes its disk log; 10 tested without)")
     ap.add_argument("--k", type=int, default=4, help="physics steps (1/120 s) per action")
     ap.add_argument("--episode-steps", type=int, default=3000, help="time limit in actions (3000 = 100 s at k=4)")
-    ap.add_argument("--stall-seconds", type=float, default=10,
+    ap.add_argument("--stall-seconds", type=float, default=STALL_SECONDS,
                     help="end an episode after this long without headway along the route (0: never)")
     ap.add_argument("--saved-starts", type=float, default=0.5,
                     help="share of episodes that start from states saved along the route instead of the bottom")

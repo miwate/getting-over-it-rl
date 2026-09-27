@@ -12,13 +12,14 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 from goi_env import GoiEnv
-from train import act, vecnormalize_path
+from train import STALL_SECONDS, act, vecnormalize_path
 
 
 def play(checkpoint, game_dir, k, steps, episodes, seed, noise=0.5):
     """One game plays `episodes` episodes; returns each one's best progress."""
     torch.set_num_threads(1)
-    env = VecNormalize.load(vecnormalize_path(checkpoint), DummyVecEnv([lambda: TimeLimit(GoiEnv(game_dir, k=k), steps)]))
+    env = VecNormalize.load(vecnormalize_path(checkpoint), DummyVecEnv([lambda: TimeLimit(
+        GoiEnv(game_dir, k=k, stall_steps=int(STALL_SECONDS * 120 / k), stall_ends=False), steps)]))
     env.training = env.norm_reward = False
     model = PPO.load(checkpoint, device="cpu")
     model.set_random_seed(seed)
