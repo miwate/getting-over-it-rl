@@ -13,8 +13,10 @@ using Object = UnityEngine.Object;
 // callbacks to disabled scripts, so their contact bookkeeping keeps working. Replays from a snapshot are bit-exact.
 class Game
 {
-    public const int ObsFields = 29; // layout: OBS_FIELDS in goi_env/client.py, then RayCount ray distances
-    static readonly float[] Ahead = { 2f, 5f, 10f }; // route points observed, in distance along the route past the pot
+    // Route points observed, in distance along the route past the pot (AHEAD in goi_env/client.py): dense close by, sparser
+    // far out. Linesight, the best Trackmania AI, sees 40 points of track ahead.
+    static readonly float[] Ahead = { 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 16, 18, 20, 25, 30, 35, 40, 45, 50 };
+    public static readonly int ObsFields = 23 + 2 * Ahead.Length; // layout: OBS_FIELDS in goi_env/client.py, then rays
     public int K = 4;                // physics steps per action
     public int RayCount = 16;
     public float RayLength = 10f;
@@ -151,18 +153,18 @@ class Game
         o[14] = Patches.Won ? 1 : 0;
         float along = route.TFToDistance(route.GetNearestPointTF(player.transform.position)); // ProgressMeter.progress, current
         o[15] = along;
+        Vector2 c = cursor.position, head = tip.position; // the cursor is where the controller aims next
+        o[16] = c.x - p.x; o[17] = c.y - p.y;
+        o[18] = c.x - head.x; o[19] = c.y - head.y;
+        var mouse = (Vector2)F.MouseInput.GetValue(pc); // the controller's smoothed mouse input
+        o[20] = mouse.x; o[21] = mouse.y;
+        o[22] = (float)F.MouseSpeed.GetValue(pc);      // its running mouse speed: the cursor's gain, and no idle drift when fast
         for (int i = 0; i < Ahead.Length; i++) // where the route goes next, relative to the pot
         {
             Vector2 q = route.Interpolate(route.DistanceToTF(along + Ahead[i])); // LevelSpline sits at the origin, unrotated
-            o[16 + 2 * i] = q.x - p.x;
-            o[17 + 2 * i] = q.y - p.y;
+            o[23 + 2 * i] = q.x - p.x;
+            o[24 + 2 * i] = q.y - p.y;
         }
-        Vector2 c = cursor.position, head = tip.position; // the cursor is where the controller aims next
-        o[22] = c.x - p.x; o[23] = c.y - p.y;
-        o[24] = c.x - head.x; o[25] = c.y - head.y;
-        var mouse = (Vector2)F.MouseInput.GetValue(pc); // the controller's smoothed mouse input
-        o[26] = mouse.x; o[27] = mouse.y;
-        o[28] = (float)F.MouseSpeed.GetValue(pc);      // its running mouse speed: the cursor's gain, and no idle drift when fast
         for (int i = 0; i < RayCount; i++)
         {
             float a = 2 * Mathf.PI * i / RayCount;

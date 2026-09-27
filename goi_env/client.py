@@ -19,10 +19,12 @@ OBS_FIELDS = (
     "hammer_cos", "hammer_sin", "hammer_angvel", "hammer_ext", "hammer_extvel",
     "head_contact", "pot_contact", "fell_in_lake", "won",  # 0/1 flags
     "progress",  # distance along the level route to the point nearest the pot (the game's ProgressMeter)
-    "ahead2_dx", "ahead2_dy", "ahead5_dx", "ahead5_dy", "ahead10_dx", "ahead10_dy",  # route 2/5/10 further on, from the pot
     "cursor_dx", "cursor_dy", "cursor_head_dx", "cursor_head_dy",  # the cursor the hammer aims at, from the pot and the head
     "mouse_x", "mouse_y", "mouse_speed",  # the controller's smoothed mouse input and running mouse speed
 )
+# The route ahead, relative to the pot: points this far further along it (Game.Ahead in the plugin).
+AHEAD = (1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 16, 18, 20, 25, 30, 35, 40, 45, 50)
+OBS_FIELDS += tuple(f"ahead{d}_{axis}" for d in AHEAD for axis in ("dx", "dy"))
 
 
 def free_port():

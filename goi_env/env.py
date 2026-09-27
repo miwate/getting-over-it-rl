@@ -1,5 +1,6 @@
 """Gymnasium environment for Getting Over It, driven through the GOI RL Bridge plugin."""
 import time
+from collections import deque
 
 import gymnasium as gym
 import numpy as np
@@ -11,6 +12,7 @@ from .client import OBS_FIELDS, GoiClient, start
 # travel per step) and large ones flicks (12: the whole 3.5 reach in one step).
 MOUSE = 12.0
 PROGRESS, LAKE, WON, POT_CONTACT = (OBS_FIELDS.index(f) for f in ("progress", "fell_in_lake", "won", "pot_contact"))
+PREV_ACTIONS = 4  # as Linesight gives its Trackmania policy its last 5 actions
 SPEED_REF = 0.2  # progress per step (6 units/s, the agent's "very fast" regime) worth one unit of speed bonus
 
 
@@ -32,9 +34,9 @@ def progress_reward(prev, now, best, air, recovery=0.0, regress=0.0, air_bonus=0
 class GoiEnv(gym.Env):
     """One game instance.
 
-    Observation: the bridge's fields (OBS_FIELDS in client.py), n_rays terrain distances, how long the pot has gone
-    without headway (as a share of stall_steps; 0 without a cutoff), then how far it is behind the episode's progress
-    record (the reward only pays beyond it).
+    Observation: the bridge's fields (OBS_FIELDS in client.py), n_rays terrain distances, the last PREV_ACTIONS actions
+    (newest first), how long the pot has gone without headway (as a share of stall_steps; 0 without a cutoff), then how
+    far it is behind the episode's progress record (the reward only pays beyond it).
     Action: mouse movement in [-1, 1]^2, as a player's mouse: the game's controller moves its cursor by it (with its own
     acceleration and smoothing) and drives the hammer head toward the cursor. A still mouse lets the cursor settle on
     the head: the hammer goes loose.
@@ -76,7 +78,7 @@ class GoiEnv(gym.Env):
             self._proc, self.client = start(game_dir, port, args=game_args, **config)
         else:
             self._proc, self.client = None, GoiClient(port=port or 5555, **config)
-        self.observation_space = spaces.Box(-np.inf, np.inf, (self.client.obs_size + 2,), np.float32)
+        self.observation_space = spaces.Box(-np.inf, np.inf, (self.client.obs_size + 2 * PREV_ACTIONS + 2,), np.float32)
         self.action_space = spaces.Box(-1.0, 1.0, (2,), np.float32)
         self.best_progress = 0.0
         self._saved_best = {}
@@ -87,10 +89,12 @@ class GoiEnv(gym.Env):
         raw = self.client.reset() if state is None else self.client.load_state(state)
         self.best_progress = self._stall_mark = self._progress = raw[PROGRESS]
         self.stalled = 0
+        self._actions = deque([(0.0, 0.0)] * PREV_ACTIONS, maxlen=PREV_ACTIONS)
         return self._observe(raw), {"best_progress": self.best_progress}
 
     def step(self, action):
         a = np.clip(action, -1.0, 1.0)
+        self._actions.appendleft(tuple(a))
         raw = self.client.step(*(a * self.mouse))
         reward = (progress_reward(self._progress, raw[PROGRESS], self.best_progress, 1.0 - raw[POT_CONTACT], **self.weights)
                   - self.time_penalty - self.action_cost * float(np.mean(a * a)))
@@ -122,6 +126,7 @@ class GoiEnv(gym.Env):
         raw = self.client.load_state(state_id)
         self.best_progress = self._saved_best[state_id]
         self._progress = raw[PROGRESS]
+        self._actions = deque([(0.0, 0.0)] * PREV_ACTIONS, maxlen=PREV_ACTIONS)
         return self._observe(raw)
 
     def drop_state(self, state_id):
@@ -130,7 +135,7 @@ class GoiEnv(gym.Env):
 
     def _observe(self, raw):
         stuck = self.stalled / self.stall_steps if self.stall_steps else 0.0
-        return np.array([*raw, stuck, self.best_progress - raw[PROGRESS]], np.float32)
+        return np.array([*raw, *(x for a in self._actions for x in a), stuck, self.best_progress - raw[PROGRESS]], np.float32)
 
     def close(self):
         self.client.close()
