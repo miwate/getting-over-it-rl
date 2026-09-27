@@ -10,7 +10,18 @@ train = [
     "imageio[ffmpeg]>=2.37.4",
     "stable-baselines3>=2.9.0",
     "tensorboard>=2.21.0",
+    "torch>=2.14.0",
 ]
+
+# PyPI's Windows torch wheels are CPU-only. The CUDA 13.0 build trains the big policy (--net big --device cuda) ~10x
+# faster than the CPU, and still runs everything on the CPU without a GPU.
+[tool.uv.sources]
+torch = { index = "pytorch-cu130", marker = "sys_platform != 'darwin'" }
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
 
 [build-system]
 requires = ["hatchling"]

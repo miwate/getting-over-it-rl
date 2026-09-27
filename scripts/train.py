@@ -15,7 +15,7 @@ from stable_baselines3.common.vec_env import SubprocVecEnv, VecMonitor, VecNorma
 
 from goi_env import OBS_FIELDS, GoiEnv
 from goi_env.env import MOUSE
-from policy import BoundedMeanPolicy
+from policy import BigPolicy, BoundedMeanPolicy
 
 PROGRESS, HEAD, POT = (OBS_FIELDS.index(f) for f in ("progress", "head_contact", "pot_contact"))
 GAP = -1  # the env's last observation field: how far the pot is behind the episode's progress record
@@ -212,6 +212,11 @@ def main():
                     help="state-dependent exploration noise held for --sde-freq steps, instead of fresh Gaussian noise every step")
     ap.add_argument("--sde-freq", type=int, default=4, help="with --gsde: steps between noise draws")
     ap.add_argument("--bounded-mean", action="store_true", help="tanh on the mean action (policy.BoundedMeanPolicy)")
+    ap.add_argument("--net", choices=("small", "big"), default="small",
+                    help="small: 2x256 MLP; big: SimBa-style residual trunks with LayerNorm (policy.BigPolicy, bounded mean)")
+    ap.add_argument("--width", type=int, default=512, help="with --net big: trunk width")
+    ap.add_argument("--blocks", type=int, default=2, help="with --net big: residual blocks per trunk")
+    ap.add_argument("--device", default="cpu", help="where the network trains: cpu (fastest for the small net) or cuda")
     ap.add_argument("--ent-coef", type=float, default=0.0, help="entropy bonus")
     ap.add_argument("--action-cost", type=float, default=0.0, help="reward cost per step of the mean squared action")
     ap.add_argument("--mouse", type=float, default=MOUSE, help="mouse input at action 1 (evaluate with the same)")
@@ -238,7 +243,7 @@ def main():
     try:
         if args.resume:
             venv = VecNormalize.load(vecnormalize_path(args.resume), venv)
-            model = PPO.load(args.resume, env=venv, device="cpu", tensorboard_log=run_dir)
+            model = PPO.load(args.resume, env=venv, device=args.device, tensorboard_log=run_dir)
         else:
             if args.warm_start:
                 venv = VecNormalize.load(vecnormalize_path(args.warm_start), venv)
@@ -250,16 +255,18 @@ def main():
             # learning_rate: at 3e-4 every update hit target_kl, 45% within the first epoch, wasting rollout data.
             # gSDE: exploration noise that varies smoothly with the state (resampled every 4 steps) instead of per-step
             # jitter, which suits physical control; log_std_init as in the RL Zoo's gSDE settings.
-            # squash_output: tanh keeps actions inside [-1, 1]. With clipping instead, progress-4's mean action drifted
-            # to ~4.5 (99% of actions clipped): exploration died and the hammer was always shoved at full force.
             # 5,120 steps per update whatever the number of games. Updates stop at target_kl after ~2 epochs anyway,
             # so learning is paced by the number of updates, not by samples per update.
             exploration = dict(use_sde=True, sde_sample_freq=args.sde_freq) if args.gsde else dict()
-            policy_kwargs = dict(net_arch=[256, 256], log_std_init=-2) if args.gsde else dict(net_arch=[256, 256])
-            model = PPO(BoundedMeanPolicy if args.bounded_mean else "MlpPolicy", venv, learning_rate=args.lr,
-                        n_steps=5120 // args.envs, batch_size=512, gamma=args.gamma, target_kl=0.02,
-                        ent_coef=args.ent_coef, **exploration, policy_kwargs=policy_kwargs, device="cpu",
-                        tensorboard_log=run_dir, verbose=1)
+            policy_kwargs = dict(log_std_init=-2) if args.gsde else {}
+            if args.net == "big":
+                policy, policy_kwargs = BigPolicy, dict(policy_kwargs, width=args.width, blocks=args.blocks)
+            else:
+                policy = BoundedMeanPolicy if args.bounded_mean else "MlpPolicy"
+                policy_kwargs["net_arch"] = [256, 256]
+            model = PPO(policy, venv, learning_rate=args.lr, n_steps=5120 // args.envs, batch_size=512, gamma=args.gamma,
+                        target_kl=0.02, ent_coef=args.ent_coef, **exploration, policy_kwargs=policy_kwargs,
+                        device=args.device, tensorboard_log=run_dir, verbose=1)
             if args.warm_start:
                 warm_start(model, args.warm_start)
         save = CheckpointCallback(max(args.save_every // args.envs, 1), checkpoints, name_prefix="ppo",
