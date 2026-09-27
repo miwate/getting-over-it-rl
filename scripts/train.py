@@ -29,7 +29,8 @@ class Starts(gym.Wrapper):
     one, favoring those started from least (weight 1/sqrt(1 + starts)), so new ground gets most of the practice. With
     `refresh`, an episode entering a bin replaces its state with that chance, so the states follow the current policy:
     progress-6 kept its first, early states for 57M steps and never crossed the chimney top; a run with fresh pools
-    crossed within 1.5M.
+    crossed within 1.5M. With `frontier`, bin weights also fall off as exp(-(bins behind the furthest one) / frontier), so
+    the furthest stretch of the route gets most of the practice.
 
     Rewinds (DeepMimic-style early termination, plus a retry): in a share of episodes, falling more than `fall` below
     the record ends the episode, and the next one starts from a state saved 1-2 s before the fall began, so the agent
@@ -45,9 +46,9 @@ class Starts(gym.Wrapper):
     """
 
     def __init__(self, env, saved_share=0.5, rewind_share=0.5, bin_size=2.0, fall=5.0, every=30, max_retries=3,
-                 trap_share=0.0, trap_after=150, pool=30, refresh=0.0):
+                 trap_share=0.0, trap_after=150, pool=30, refresh=0.0, frontier=0.0):
         super().__init__(env)
-        self.refresh, self.bin = refresh, None
+        self.refresh, self.frontier, self.bin = refresh, frontier, None
         self.saved_share, self.rewind_share, self.bin_size = saved_share, rewind_share, bin_size
         self.trap_share, self.trap_after, self.pool = trap_share, trap_after, pool
         self.traps = []    # state ids of recent traps, oldest first
@@ -80,6 +81,8 @@ class Starts(gym.Wrapper):
             elif self.bins and r < self.trap_share + self.saved_share:
                 bins = list(self.bins)
                 weights = np.array([1 / np.sqrt(1 + self.bins[b][1]) for b in bins])
+                if self.frontier:
+                    weights *= np.exp((np.array(bins) - max(bins)) / self.frontier)
                 b = bins[self.rng.choice(len(bins), p=weights / weights.sum())]
                 self.bins[b][1] += 1
                 options["state"] = self.bins[b][0]
@@ -124,10 +127,11 @@ class Starts(gym.Wrapper):
         return obs, reward, terminated, truncated, {**info, "from_bottom": self.from_bottom, "rewinds": self.rewinds}
 
 
-def make_env(game_dir, k, episode_steps, stall_steps, saved_starts, rewinds, traps=0.0, refresh=0.0, **env_kwargs):
+def make_env(game_dir, k, episode_steps, stall_steps, saved_starts, rewinds, traps=0.0, refresh=0.0, frontier=0.0,
+             **env_kwargs):
     """env_kwargs: GoiEnv's action_cost, mouse and reward weights."""
     env = Starts(GoiEnv(game_dir, k=k, stall_steps=stall_steps, **env_kwargs), saved_starts, rewinds, trap_share=traps,
-                 trap_after=(stall_steps or 300) // 2, refresh=refresh)
+                 trap_after=(stall_steps or 300) // 2, refresh=refresh, frontier=frontier)
     return TimeLimit(env, episode_steps)
 
 
@@ -195,6 +199,8 @@ def main():
                     help="share of episodes that start from states saved along the route instead of the bottom")
     ap.add_argument("--rewinds", type=float, default=0.0,
                     help="share of episodes where a fall ends the episode and the next retries from just before it")
+    ap.add_argument("--frontier", type=float, default=0.0,
+                    help="favor saved starts near the furthest point: weights fall off by e every this many 2-unit bins behind it (0: off)")
     ap.add_argument("--refresh", type=float, default=0.0,
                     help="chance that an episode entering a stretch of the route replaces its saved state")
     ap.add_argument("--traps", type=float, default=0.0,
@@ -227,7 +233,7 @@ def main():
     env_kwargs = dict(action_cost=args.action_cost, mouse=args.mouse, recovery=args.recovery, regress=args.regress,
                       air_bonus=args.air_bonus, speed_bonus=args.speed_bonus)
     envs = [partial(make_env, args.game_dir, args.k, args.episode_steps, stall_steps, args.saved_starts,
-                    args.rewinds, args.traps, args.refresh, **env_kwargs)] * args.envs
+                    args.rewinds, args.traps, args.refresh, args.frontier, **env_kwargs)] * args.envs
     venv = VecMonitor(SubprocVecEnv(envs), info_keywords=("best_progress", "from_bottom", "rewinds"))
     try:
         if args.resume:
