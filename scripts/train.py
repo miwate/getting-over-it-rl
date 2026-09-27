@@ -115,9 +115,10 @@ class Starts(gym.Wrapper):
         return obs, reward, terminated, truncated, {**info, "from_bottom": self.from_bottom, "rewinds": self.rewinds}
 
 
-def make_env(game_dir, k, episode_steps, stall_steps, saved_starts, rewinds, action_cost=0.0, mouse=MOUSE, traps=0.0):
-    env = Starts(GoiEnv(game_dir, k=k, stall_steps=stall_steps, action_cost=action_cost, mouse=mouse), saved_starts,
-                 rewinds, trap_share=traps, trap_after=(stall_steps or 300) // 2)
+def make_env(game_dir, k, episode_steps, stall_steps, saved_starts, rewinds, traps=0.0, **env_kwargs):
+    """env_kwargs: GoiEnv's action_cost, mouse and reward weights."""
+    env = Starts(GoiEnv(game_dir, k=k, stall_steps=stall_steps, **env_kwargs), saved_starts, rewinds, trap_share=traps,
+                 trap_after=(stall_steps or 300) // 2)
     return TimeLimit(env, episode_steps)
 
 
@@ -197,6 +198,11 @@ def main():
     ap.add_argument("--ent-coef", type=float, default=0.0, help="entropy bonus")
     ap.add_argument("--action-cost", type=float, default=0.0, help="reward cost per step of the mean squared action")
     ap.add_argument("--mouse", type=float, default=MOUSE, help="mouse input at action 1 (evaluate with the same)")
+    # Reward weights (goi_env.env.progress_reward); all 0: new progress records only.
+    ap.add_argument("--recovery", type=float, default=0.0, help="reward per unit climbed back below the episode's record")
+    ap.add_argument("--regress", type=float, default=0.0, help="cost per unit of progress lost (>= --recovery: falls never pay)")
+    ap.add_argument("--air-bonus", type=float, default=0.0, help="extra reward share for new ground made with the pot touching nothing")
+    ap.add_argument("--speed-bonus", type=float, default=0.0, help="extra reward share per 6 units/s of new ground (capped at 2)")
     ap.add_argument("--save-every", type=int, default=500_000, help="checkpoint interval in environment steps")
     ap.add_argument("--resume", help="a checkpoint .zip to continue from, with its own settings")
     ap.add_argument("--warm-start", help="a checkpoint .zip whose weights and normalization start this run's settings")
@@ -207,8 +213,10 @@ def main():
     run_dir = os.path.join("runs", args.name)
     checkpoints = os.path.join(run_dir, "checkpoints")
     stall_steps = int(args.stall_seconds * 120 / args.k) or None
+    env_kwargs = dict(action_cost=args.action_cost, mouse=args.mouse, recovery=args.recovery, regress=args.regress,
+                      air_bonus=args.air_bonus, speed_bonus=args.speed_bonus)
     envs = [partial(make_env, args.game_dir, args.k, args.episode_steps, stall_steps, args.saved_starts,
-                    args.rewinds, args.action_cost, args.mouse, args.traps)] * args.envs
+                    args.rewinds, args.traps, **env_kwargs)] * args.envs
     venv = VecMonitor(SubprocVecEnv(envs), info_keywords=("best_progress", "from_bottom", "rewinds"))
     try:
         if args.resume:
