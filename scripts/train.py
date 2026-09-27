@@ -14,10 +14,11 @@ from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback
 from stable_baselines3.common.vec_env import SubprocVecEnv, VecMonitor, VecNormalize
 
 from goi_env import OBS_FIELDS, GoiEnv
+from goi_env.env import MOUSE
+from policy import BoundedMeanPolicy
 
 PROGRESS, HEAD, POT = (OBS_FIELDS.index(f) for f in ("progress", "head_contact", "pot_contact"))
 GAP = -1  # the env's last observation field: how far the pot is behind the episode's progress record
-GAMMA = 0.998  # rewards ~17 s ahead still count: a fall can cost far more time than 0.995's ~7 s horizon sees
 
 
 class Starts(gym.Wrapper):
@@ -33,12 +34,19 @@ class Starts(gym.Wrapper):
     play on after falls, so recovering still gets practice. The cut is a truncation: the fall's cost is learned from
     the value of where the pot ended up, not as a death.
 
+    Traps: a state where an episode has made no headway for trap_after steps is saved into a pool (the last `pool`
+    kept), and a share of episodes start from one, so the agent practices exactly where it gets stuck. Random mouse
+    strokes escape abl-oldhp's traps at the steep climb 10-30% of the time where the policy itself escaped 0 of 10.
+
     Infos carry from_bottom and rewinds (1 or 0). Bottom starts without rewinds play the real game.
     """
 
-    def __init__(self, env, saved_share=0.5, rewind_share=0.5, bin_size=2.0, fall=5.0, every=30, max_retries=3):
+    def __init__(self, env, saved_share=0.5, rewind_share=0.5, bin_size=2.0, fall=5.0, every=30, max_retries=3,
+                 trap_share=0.0, trap_after=150, pool=30):
         super().__init__(env)
         self.saved_share, self.rewind_share, self.bin_size = saved_share, rewind_share, bin_size
+        self.trap_share, self.trap_after, self.pool = trap_share, trap_after, pool
+        self.traps = []    # state ids of recent traps, oldest first
         self.fall, self.every, self.max_retries = fall, every, max_retries
         self.bins = {}     # progress bin -> [state id, starts]; ponytail: the first state per bin is kept for good
         self.recent = []   # (state id, gap when saved): one per `every` steps in rewind episodes, the last 4 kept
@@ -54,17 +62,24 @@ class Starts(gym.Wrapper):
             game.drop_state(state)
         self.recent = []
         self.from_bottom = 0
+        self.start = "bottom"  # what this episode starts from: bottom, bin, trap or retry
         if self.retry is not None:
             options["state"] = self.retry
             self.retries += 1
+            self.start = "retry"
         else:
             self.retries = 0
-            if self.bins and self.rng.random() < self.saved_share:
+            r = self.rng.random()
+            if self.traps and r < self.trap_share:
+                options["state"] = self.traps[self.rng.integers(len(self.traps))]
+                self.start = "trap"
+            elif self.bins and r < self.trap_share + self.saved_share:
                 bins = list(self.bins)
                 weights = np.array([1 / np.sqrt(1 + self.bins[b][1]) for b in bins])
                 b = bins[self.rng.choice(len(bins), p=weights / weights.sum())]
                 self.bins[b][1] += 1
                 options["state"] = self.bins[b][0]
+                self.start = "bin"
             else:
                 self.from_bottom = 1
         self.rewinds = int(self.retry is not None or self.rng.random() < self.rewind_share)
@@ -82,6 +97,10 @@ class Starts(gym.Wrapper):
         b = int(obs[PROGRESS] // self.bin_size)
         if self.saved_share and b not in self.bins and not terminated and (obs[HEAD] or obs[POT]):
             self.bins[b] = [game.save_state(), 0]
+        if self.trap_share and game.stalled == self.trap_after and not terminated:
+            self.traps.append(game.save_state())
+            if len(self.traps) > self.pool:
+                game.drop_state(self.traps.pop(0))
         if self.rewinds and not terminated:
             if obs[GAP] > self.fall:
                 before = [state for state, gap in self.recent if gap < 1.0]  # saved near the record: before the fall
@@ -96,8 +115,9 @@ class Starts(gym.Wrapper):
         return obs, reward, terminated, truncated, {**info, "from_bottom": self.from_bottom, "rewinds": self.rewinds}
 
 
-def make_env(game_dir, k, episode_steps, stall_steps, saved_starts, rewinds):
-    env = Starts(GoiEnv(game_dir, k=k, stall_steps=stall_steps), saved_starts, rewinds)
+def make_env(game_dir, k, episode_steps, stall_steps, saved_starts, rewinds, action_cost=0.0, mouse=MOUSE, traps=0.0):
+    env = Starts(GoiEnv(game_dir, k=k, stall_steps=stall_steps, action_cost=action_cost, mouse=mouse), saved_starts,
+                 rewinds, trap_share=traps, trap_after=(stall_steps or 300) // 2)
     return TimeLimit(env, episode_steps)
 
 
@@ -106,6 +126,21 @@ def explore(model, step):
     that's -1). predict() alone never re-draws it, which turns a gSDE policy deterministic in a fixed, random way."""
     if model.use_sde and (step == 0 or model.sde_sample_freq > 0 and step % model.sde_sample_freq == 0):
         model.policy.reset_noise(1)
+
+
+def warm_start(model, checkpoint):
+    """Copy a checkpoint's weights into a new model, where they fit: a bounded mean nests the mean layer as action_net.0,
+    and gSDE's noise matrix doesn't match a plain Gaussian's log_std (it starts fresh)."""
+    new = model.policy.state_dict()
+    nested = "action_net.0.weight" in new
+    loaded = {}
+    for k, v in PPO.load(checkpoint, device="cpu").policy.state_dict().items():
+        if k.startswith("action_net."):
+            k = "action_net." + ("0." if nested else "") + k.split(".")[-1]
+        if k in new and new[k].shape == v.shape:
+            loaded[k] = v
+    model.policy.load_state_dict({**new, **loaded})
+    print(f"warm start from {checkpoint}: {len(loaded)} of {len(new)} tensors; fresh: {sorted(set(new) - set(loaded))}")
 
 
 def vecnormalize_path(checkpoint):
@@ -148,10 +183,23 @@ def main():
                     help="end an episode after this long without headway along the route (0: never)")
     ap.add_argument("--saved-starts", type=float, default=0.5,
                     help="share of episodes that start from states saved along the route instead of the bottom")
-    ap.add_argument("--rewinds", type=float, default=0.5,
+    ap.add_argument("--rewinds", type=float, default=0.0,
                     help="share of episodes where a fall ends the episode and the next retries from just before it")
+    ap.add_argument("--traps", type=float, default=0.0,
+                    help="share of episodes that start from states where an episode was stuck (no headway for half the stall time)")
+    # Defaults: abl-oldhp's settings, the best of the 2M-step experiments (docs/RECON.md, "Settings experiments").
+    ap.add_argument("--lr", type=float, default=3e-4, help="learning rate")
+    ap.add_argument("--gamma", type=float, default=0.995, help="discount: 0.995 values rewards ~7 s ahead, 0.998 ~17 s")
+    ap.add_argument("--gsde", action="store_true",
+                    help="state-dependent exploration noise held for --sde-freq steps, instead of fresh Gaussian noise every step")
+    ap.add_argument("--sde-freq", type=int, default=4, help="with --gsde: steps between noise draws")
+    ap.add_argument("--bounded-mean", action="store_true", help="tanh on the mean action (policy.BoundedMeanPolicy)")
+    ap.add_argument("--ent-coef", type=float, default=0.0, help="entropy bonus")
+    ap.add_argument("--action-cost", type=float, default=0.0, help="reward cost per step of the mean squared action")
+    ap.add_argument("--mouse", type=float, default=MOUSE, help="mouse input at action 1 (evaluate with the same)")
     ap.add_argument("--save-every", type=int, default=500_000, help="checkpoint interval in environment steps")
-    ap.add_argument("--resume", help="a checkpoint .zip to continue from")
+    ap.add_argument("--resume", help="a checkpoint .zip to continue from, with its own settings")
+    ap.add_argument("--warm-start", help="a checkpoint .zip whose weights and normalization start this run's settings")
     args = ap.parse_args()
     if not args.game_dir:
         ap.error("pass --game-dir or set GOI_GAME_DIR")
@@ -160,14 +208,18 @@ def main():
     checkpoints = os.path.join(run_dir, "checkpoints")
     stall_steps = int(args.stall_seconds * 120 / args.k) or None
     envs = [partial(make_env, args.game_dir, args.k, args.episode_steps, stall_steps, args.saved_starts,
-                    args.rewinds)] * args.envs
+                    args.rewinds, args.action_cost, args.mouse, args.traps)] * args.envs
     venv = VecMonitor(SubprocVecEnv(envs), info_keywords=("best_progress", "from_bottom", "rewinds"))
     try:
         if args.resume:
             venv = VecNormalize.load(vecnormalize_path(args.resume), venv)
             model = PPO.load(args.resume, env=venv, device="cpu", tensorboard_log=run_dir)
         else:
-            venv = VecNormalize(venv, gamma=GAMMA)
+            if args.warm_start:
+                venv = VecNormalize.load(vecnormalize_path(args.warm_start), venv)
+                venv.gamma = args.gamma
+            else:
+                venv = VecNormalize(venv, gamma=args.gamma)
             # target_kl: stop each update's epochs early once the policy has moved enough. Without it, action noise
             # collapsed (std 0.55 -> 0.03), updates grew (KL > 1) and performance regressed after ~1M steps.
             # learning_rate: at 3e-4 every update hit target_kl, 45% within the first epoch, wasting rollout data.
@@ -175,12 +227,16 @@ def main():
             # jitter, which suits physical control; log_std_init as in the RL Zoo's gSDE settings.
             # squash_output: tanh keeps actions inside [-1, 1]. With clipping instead, progress-4's mean action drifted
             # to ~4.5 (99% of actions clipped): exploration died and the hammer was always shoved at full force.
-            # n_steps 512 with 10 games: 5,120 steps per update. Updates stop at target_kl after ~2 epochs anyway, so
-            # learning is paced by the number of updates, not by samples per update.
-            model = PPO("MlpPolicy", venv, learning_rate=1e-4, n_steps=512, batch_size=512, gamma=GAMMA,
-                        target_kl=0.02, use_sde=True, sde_sample_freq=4,
-                        policy_kwargs=dict(net_arch=[256, 256], log_std_init=-2, squash_output=True), device="cpu",
+            # 5,120 steps per update whatever the number of games. Updates stop at target_kl after ~2 epochs anyway,
+            # so learning is paced by the number of updates, not by samples per update.
+            exploration = dict(use_sde=True, sde_sample_freq=args.sde_freq) if args.gsde else dict()
+            policy_kwargs = dict(net_arch=[256, 256], log_std_init=-2) if args.gsde else dict(net_arch=[256, 256])
+            model = PPO(BoundedMeanPolicy if args.bounded_mean else "MlpPolicy", venv, learning_rate=args.lr,
+                        n_steps=5120 // args.envs, batch_size=512, gamma=args.gamma, target_kl=0.02,
+                        ent_coef=args.ent_coef, **exploration, policy_kwargs=policy_kwargs, device="cpu",
                         tensorboard_log=run_dir, verbose=1)
+            if args.warm_start:
+                warm_start(model, args.warm_start)
         save = CheckpointCallback(max(args.save_every // args.envs, 1), checkpoints, name_prefix="ppo",
                                   save_vecnormalize=True)
         try:

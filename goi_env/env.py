@@ -33,13 +33,15 @@ class GoiEnv(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"]}
 
     def __init__(self, game_dir=None, port=None, k=4, n_rays=32, ray_length=15.0, time_penalty=0.001, stall_steps=None,
-                 render_mode=None, realtime=True, width=640, height=360, game_args=()):
+                 action_cost=0.0, mouse=MOUSE, render_mode=None, realtime=True, width=640, height=360, game_args=()):
         """Launches the game from game_dir on a free port, or with game_dir=None connects to one already running on
         `port` (default 5555).
 
         render_mode="human" shows the game window at real speed; realtime=False lets it run as fast as it can.
         render_mode="rgb_array" makes render() return the frame the game drew after the last step.
         game_args: extra launch flags, e.g. ["-goi-colliders"] to draw the physics shapes over the game.
+        action_cost: subtracted from the reward times the mean squared action, so big mouse moves have to pay off.
+        mouse: mouse input at action 1.
         """
         self.render_mode = render_mode
         self.metadata = {**self.metadata, "render_fps": 120 / k}
@@ -47,6 +49,8 @@ class GoiEnv(gym.Env):
         self._frame_due = 0.0
         self.time_penalty = time_penalty
         self.stall_steps = stall_steps
+        self.action_cost = action_cost
+        self.mouse = mouse
         config = dict(k=k, n_rays=n_rays, ray_length=ray_length, render=render_mode is not None,
                       width=width, height=height)
         if game_dir:
@@ -63,20 +67,20 @@ class GoiEnv(gym.Env):
         state = (options or {}).get("state")
         raw = self.client.reset() if state is None else self.client.load_state(state)
         self.best_progress = self._stall_mark = raw[PROGRESS]
-        self._stalled = 0
+        self.stalled = 0
         return self._observe(raw), {"best_progress": self.best_progress}
 
     def step(self, action):
-        x, y = np.clip(action, -1.0, 1.0) * MOUSE
-        raw = self.client.step(x, y)
-        reward = max(0.0, raw[PROGRESS] - self.best_progress) - self.time_penalty
+        a = np.clip(action, -1.0, 1.0)
+        raw = self.client.step(*(a * self.mouse))
+        reward = max(0.0, raw[PROGRESS] - self.best_progress) - self.time_penalty - self.action_cost * float(np.mean(a * a))
         self.best_progress = max(self.best_progress, raw[PROGRESS])
-        self._stalled += 1
+        self.stalled += 1
         self._stall_mark = min(self._stall_mark, raw[PROGRESS])
         if raw[PROGRESS] >= self._stall_mark + 1.0:
-            self._stall_mark, self._stalled = raw[PROGRESS], 0
+            self._stall_mark, self.stalled = raw[PROGRESS], 0
         terminated = bool(raw[LAKE] or raw[WON])
-        truncated = self.stall_steps is not None and self._stalled >= self.stall_steps
+        truncated = self.stall_steps is not None and self.stalled >= self.stall_steps
         if self._realtime:  # the bridge itself runs many times faster than real time
             self._frame_due = max(self._frame_due + 1 / self.metadata["render_fps"], time.perf_counter())
             time.sleep(max(0.0, self._frame_due - time.perf_counter()))
@@ -103,10 +107,11 @@ class GoiEnv(gym.Env):
         self._saved_best.pop(state_id, None)
 
     def _observe(self, raw):
-        stuck = self._stalled / self.stall_steps if self.stall_steps else 0.0
+        stuck = self.stalled / self.stall_steps if self.stall_steps else 0.0
         return np.array([*raw, stuck, self.best_progress - raw[PROGRESS]], np.float32)
 
     def close(self):
         self.client.close()
         if self._proc:
             self._proc.wait(timeout=30)
+
