@@ -26,7 +26,10 @@ class Starts(gym.Wrapper):
 
     Saved starts (Go-Explore style): each game keeps one state per bin_size of route progress, saved the first time an
     episode gets there with the pot or the hammer touching something (not mid-fall). A share of episodes start from
-    one, favoring those started from least (weight 1/sqrt(1 + starts)), so new ground gets most of the practice.
+    one, favoring those started from least (weight 1/sqrt(1 + starts)), so new ground gets most of the practice. With
+    `refresh`, an episode entering a bin replaces its state with that chance, so the states follow the current policy:
+    progress-6 kept its first, early states for 57M steps and never crossed the chimney top; a run with fresh pools
+    crossed within 1.5M.
 
     Rewinds (DeepMimic-style early termination, plus a retry): in a share of episodes, falling more than `fall` below
     the record ends the episode, and the next one starts from a state saved 1-2 s before the fall began, so the agent
@@ -42,8 +45,9 @@ class Starts(gym.Wrapper):
     """
 
     def __init__(self, env, saved_share=0.5, rewind_share=0.5, bin_size=2.0, fall=5.0, every=30, max_retries=3,
-                 trap_share=0.0, trap_after=150, pool=30):
+                 trap_share=0.0, trap_after=150, pool=30, refresh=0.0):
         super().__init__(env)
+        self.refresh, self.bin = refresh, None
         self.saved_share, self.rewind_share, self.bin_size = saved_share, rewind_share, bin_size
         self.trap_share, self.trap_after, self.pool = trap_share, trap_after, pool
         self.traps = []    # state ids of recent traps, oldest first
@@ -95,8 +99,13 @@ class Starts(gym.Wrapper):
         game = self.env.unwrapped
         self.t += 1
         b = int(obs[PROGRESS] // self.bin_size)
-        if self.saved_share and b not in self.bins and not terminated and (obs[HEAD] or obs[POT]):
-            self.bins[b] = [game.save_state(), 0]
+        entering, self.bin = b != self.bin, b
+        if self.saved_share and not terminated and (obs[HEAD] or obs[POT]):
+            if b not in self.bins:
+                self.bins[b] = [game.save_state(), 0]
+            elif entering and self.rng.random() < self.refresh:
+                game.drop_state(self.bins[b][0])
+                self.bins[b] = [game.save_state(), 0]
         if self.trap_share and game.stalled == self.trap_after and not terminated:
             self.traps.append(game.save_state())
             if len(self.traps) > self.pool:
@@ -115,10 +124,10 @@ class Starts(gym.Wrapper):
         return obs, reward, terminated, truncated, {**info, "from_bottom": self.from_bottom, "rewinds": self.rewinds}
 
 
-def make_env(game_dir, k, episode_steps, stall_steps, saved_starts, rewinds, traps=0.0, **env_kwargs):
+def make_env(game_dir, k, episode_steps, stall_steps, saved_starts, rewinds, traps=0.0, refresh=0.0, **env_kwargs):
     """env_kwargs: GoiEnv's action_cost, mouse and reward weights."""
     env = Starts(GoiEnv(game_dir, k=k, stall_steps=stall_steps, **env_kwargs), saved_starts, rewinds, trap_share=traps,
-                 trap_after=(stall_steps or 300) // 2)
+                 trap_after=(stall_steps or 300) // 2, refresh=refresh)
     return TimeLimit(env, episode_steps)
 
 
@@ -186,6 +195,8 @@ def main():
                     help="share of episodes that start from states saved along the route instead of the bottom")
     ap.add_argument("--rewinds", type=float, default=0.0,
                     help="share of episodes where a fall ends the episode and the next retries from just before it")
+    ap.add_argument("--refresh", type=float, default=0.0,
+                    help="chance that an episode entering a stretch of the route replaces its saved state")
     ap.add_argument("--traps", type=float, default=0.0,
                     help="share of episodes that start from states where an episode was stuck (no headway for half the stall time)")
     # Defaults: abl-oldhp's settings, the best of the 2M-step experiments (docs/RECON.md, "Settings experiments").
@@ -216,7 +227,7 @@ def main():
     env_kwargs = dict(action_cost=args.action_cost, mouse=args.mouse, recovery=args.recovery, regress=args.regress,
                       air_bonus=args.air_bonus, speed_bonus=args.speed_bonus)
     envs = [partial(make_env, args.game_dir, args.k, args.episode_steps, stall_steps, args.saved_starts,
-                    args.rewinds, args.traps, **env_kwargs)] * args.envs
+                    args.rewinds, args.traps, args.refresh, **env_kwargs)] * args.envs
     venv = VecMonitor(SubprocVecEnv(envs), info_keywords=("best_progress", "from_bottom", "rewinds"))
     try:
         if args.resume:
