@@ -94,7 +94,8 @@ def main():
                     help="the policy that plays up to the gate states (rw-control, ported)")
     ap.add_argument("--finder-noise", type=float, default=0.5)
     ap.add_argument("--noise", type=float, default=0.5, help="candidates' exploration noise scale (train.act)")
-    ap.add_argument("--states", type=int, default=16, help="gate states (seeds 0, 1, ...)")
+    ap.add_argument("--states", type=int, default=16, help="gate states (seeds --seed, --seed + 1, ...)")
+    ap.add_argument("--seed", type=int, default=0, help="first state's seed; another one gives independent states")
     ap.add_argument("--tries", type=int, default=20, help="tries per state and candidate")
     ap.add_argument("--seconds", type=float, default=15, help="game time per try")
     ap.add_argument("--start", type=float, default=176, help="route progress of the gate states")
@@ -110,7 +111,8 @@ def main():
     games = min(args.games, args.states)
     with ProcessPoolExecutor(games) as ex:
         results = {}
-        for part in ex.map(bench, [range(i, args.states, games) for i in range(games)], repeat(candidates), repeat(args)):
+        chunks = [range(args.seed + i, args.seed + args.states, games) for i in range(games)]
+        for part in ex.map(bench, chunks, repeat(candidates), repeat(args)):
             results.update(part)
     seeds = sorted(results)
     total = args.tries * len(seeds)
