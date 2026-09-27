@@ -16,7 +16,7 @@ from stable_baselines3.common.vec_env import SubprocVecEnv, VecMonitor, VecNorma
 
 from goi_env import OBS_FIELDS, GoiEnv
 from goi_env.env import MOUSE
-from policy import BigPolicy, BoundedMeanPolicy
+from policy import BigPolicy, BoundedMeanPolicy, GrownPolicy
 
 PROGRESS, HEAD, POT = (OBS_FIELDS.index(f) for f in ("progress", "head_contact", "pot_contact"))
 GAP = -1  # the env's last observation field: how far the pot is behind the episode's progress record
@@ -43,13 +43,15 @@ class Starts(gym.Wrapper):
     kept), and a share of episodes start from one, so the agent practices exactly where it gets stuck. Random mouse
     strokes escape abl-oldhp's traps at the steep climb 10-30% of the time where the policy itself escaped 0 of 10.
 
+    With `window` (lo, hi), saved starts come only from that stretch of route progress, to focus practice on one part.
+
     Infos carry from_bottom and rewinds (1 or 0). Bottom starts without rewinds play the real game.
     """
 
     def __init__(self, env, saved_share=0.5, rewind_share=0.5, bin_size=2.0, fall=5.0, every=30, max_retries=3,
-                 trap_share=0.0, trap_after=150, pool=30, refresh=0.0, frontier=0.0):
+                 trap_share=0.0, trap_after=150, pool=30, refresh=0.0, frontier=0.0, window=None):
         super().__init__(env)
-        self.refresh, self.frontier, self.bin = refresh, frontier, None
+        self.refresh, self.frontier, self.window, self.bin = refresh, frontier, window, None
         self.saved_share, self.rewind_share, self.bin_size = saved_share, rewind_share, bin_size
         self.trap_share, self.trap_after, self.pool = trap_share, trap_after, pool
         self.traps = []    # state ids of recent traps, oldest first
@@ -76,11 +78,12 @@ class Starts(gym.Wrapper):
         else:
             self.retries = 0
             r = self.rng.random()
+            lo, hi = self.window or (-np.inf, np.inf)
+            bins = [b for b in self.bins if lo <= b * self.bin_size < hi]
             if self.traps and r < self.trap_share:
                 options["state"] = self.traps[self.rng.integers(len(self.traps))]
                 self.start = "trap"
-            elif self.bins and r < self.trap_share + self.saved_share:
-                bins = list(self.bins)
+            elif bins and r < self.trap_share + self.saved_share:
                 weights = np.array([1 / np.sqrt(1 + self.bins[b][1]) for b in bins])
                 if self.frontier:
                     weights *= np.exp((np.array(bins) - max(bins)) / self.frontier)
@@ -129,10 +132,10 @@ class Starts(gym.Wrapper):
 
 
 def make_env(game_dir, k, episode_steps, stall_steps, saved_starts, rewinds, traps=0.0, refresh=0.0, frontier=0.0,
-             **env_kwargs):
+             window=None, **env_kwargs):
     """env_kwargs: GoiEnv's action_cost, mouse and reward weights."""
     env = Starts(GoiEnv(game_dir, k=k, stall_steps=stall_steps, **env_kwargs), saved_starts, rewinds, trap_share=traps,
-                 trap_after=(stall_steps or 300) // 2, refresh=refresh, frontier=frontier)
+                 trap_after=(stall_steps or 300) // 2, refresh=refresh, frontier=frontier, window=window)
     return TimeLimit(env, episode_steps)
 
 
@@ -217,8 +220,13 @@ def main():
                     help="chance that an episode entering a stretch of the route replaces its saved state")
     ap.add_argument("--traps", type=float, default=0.0,
                     help="share of episodes that start from states where an episode was stuck (no headway for half the stall time)")
+    ap.add_argument("--window", type=float, nargs=2, metavar=("LO", "HI"),
+                    help="saved starts only from this stretch of route progress (the chimney top: 170 200)")
     # Defaults: abl-oldhp's settings, the best of the 2M-step experiments (docs/RECON.md, "Settings experiments").
     ap.add_argument("--lr", type=float, default=3e-4, help="learning rate")
+    ap.add_argument("--lr-end", type=float, help="decay the learning rate linearly to this by the end of the run")
+    ap.add_argument("--target-kl", type=float, default=0.02,
+                    help="stop each update once the policy has moved this far (smaller: gentler fine-tuning)")
     ap.add_argument("--gamma", type=float, default=0.995, help="discount: 0.995 values rewards ~7 s ahead, 0.998 ~17 s")
     ap.add_argument("--gsde", action="store_true",
                     help="state-dependent exploration noise held for --sde-freq steps, instead of fresh Gaussian noise every step")
@@ -228,6 +236,9 @@ def main():
                     help="small: 2x256 MLP; big: SimBa-style residual trunks with LayerNorm (policy.BigPolicy, bounded mean)")
     ap.add_argument("--width", type=int, default=512, help="with --net big: trunk width")
     ap.add_argument("--blocks", type=int, default=2, help="with --net big: residual blocks per trunk")
+    ap.add_argument("--grow", type=int, default=0,
+                    help="with --net small: this many residual blocks at the end of each trunk, adding nothing until trained, "
+                         "so a warm start keeps its behavior with more room to learn (policy.GrownPolicy, bounded mean)")
     ap.add_argument("--device", default="cpu", help="where the network trains: cpu (fastest for the small net) or cuda")
     ap.add_argument("--ent-coef", type=float, default=0.0, help="entropy bonus")
     ap.add_argument("--action-cost", type=float, default=0.0, help="reward cost per step of the mean squared action")
@@ -250,7 +261,7 @@ def main():
     env_kwargs = dict(action_cost=args.action_cost, mouse=args.mouse, recovery=args.recovery, regress=args.regress,
                       air_bonus=args.air_bonus, speed_bonus=args.speed_bonus)
     envs = [partial(make_env, args.game_dir, args.k, args.episode_steps, stall_steps, args.saved_starts,
-                    args.rewinds, args.traps, args.refresh, args.frontier, **env_kwargs)] * args.envs
+                    args.rewinds, args.traps, args.refresh, args.frontier, args.window, **env_kwargs)] * args.envs
     venv = VecMonitor(SubprocVecEnv(envs), info_keywords=("best_progress", "from_bottom", "rewinds"))
     try:
         if args.resume:
@@ -273,11 +284,14 @@ def main():
             policy_kwargs = dict(log_std_init=-2) if args.gsde else {}
             if args.net == "big":
                 policy, policy_kwargs = BigPolicy, dict(policy_kwargs, width=args.width, blocks=args.blocks)
+            elif args.grow:
+                policy, policy_kwargs = GrownPolicy, dict(policy_kwargs, net_arch=[256, 256], grow=args.grow)
             else:
                 policy = BoundedMeanPolicy if args.bounded_mean else "MlpPolicy"
                 policy_kwargs["net_arch"] = [256, 256]
-            model = PPO(policy, venv, learning_rate=args.lr, n_steps=5120 // args.envs, batch_size=512, gamma=args.gamma,
-                        target_kl=0.02, ent_coef=args.ent_coef, **exploration, policy_kwargs=policy_kwargs,
+            lr = args.lr if args.lr_end is None else lambda left: args.lr_end + left * (args.lr - args.lr_end)
+            model = PPO(policy, venv, learning_rate=lr, n_steps=5120 // args.envs, batch_size=512, gamma=args.gamma,
+                        target_kl=args.target_kl, ent_coef=args.ent_coef, **exploration, policy_kwargs=policy_kwargs,
                         device=args.device, tensorboard_log=run_dir, verbose=1)
             if args.warm_start:
                 warm_start(model, args.warm_start)
