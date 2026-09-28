@@ -42,7 +42,9 @@ class GoiEnv(gym.Env):
     the head: the hammer goes loose.
     Reward: progress_reward (new ground along the level route, by default only that), minus a time penalty per step.
     Raw height would pay for hopping in place; the route first goes right, over the lakeside rocks.
-    Episodes end when the pot falls in the lake or wins, and are truncated after stall_steps without headway (if set):
+    Episodes end when the pot falls in the lake or wins (with snake_ends, also when it touches the Snake, a frictionless
+    chute from beside the bucket down to the start: in training, a death to avoid), and are truncated after
+    stall_steps without headway (if set):
     progress hasn't risen 1 above its lowest point since. Climbing back after a fall counts; perching or rocking in a
     hole doesn't. With stall_ends=False the count starts over instead, so a test episode goes on and the policy still
     gets the stuck signal it trained with. Wrap in TimeLimit for a time limit.
@@ -54,7 +56,7 @@ class GoiEnv(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"]}
 
     def __init__(self, game_dir=None, port=None, k=4, n_rays=32, ray_length=15.0, time_penalty=0.001, stall_steps=None,
-                 stall_ends=True, action_cost=0.0, mouse=MOUSE, recovery=0.0, regress=0.0, air_bonus=0.0, speed_bonus=0.0,
+                 stall_ends=True, snake_ends=False, action_cost=0.0, mouse=MOUSE, recovery=0.0, regress=0.0, air_bonus=0.0, speed_bonus=0.0,
                  render_mode=None, realtime=True, width=640, height=360, game_args=()):
         """Launches the game from game_dir on a free port, or with game_dir=None connects to one already running on
         `port` (default 5555).
@@ -71,7 +73,7 @@ class GoiEnv(gym.Env):
         self._realtime = render_mode == "human" and realtime
         self._frame_due = 0.0
         self.time_penalty = time_penalty
-        self.stall_steps, self.stall_ends = stall_steps, stall_ends
+        self.stall_steps, self.stall_ends, self.snake_ends = stall_steps, stall_ends, snake_ends
         self.action_cost = action_cost
         self.mouse = mouse
         self.weights = dict(recovery=recovery, regress=regress, air_bonus=air_bonus, speed_bonus=speed_bonus)
@@ -110,7 +112,7 @@ class GoiEnv(gym.Env):
         self._stall_mark = min(self._stall_mark, raw[PROGRESS])
         if raw[PROGRESS] >= self._stall_mark + 1.0:
             self._stall_mark, self.stalled = raw[PROGRESS], 0
-        terminated = bool(raw[LAKE] or raw[WON])
+        terminated = bool(raw[LAKE] or raw[WON] or self.snake_ends and self.client.on_snake)
         truncated = self.stall_steps is not None and self.stalled >= self.stall_steps
         if truncated and not self.stall_ends:  # start the count over and play on
             self._stall_mark, self.stalled, truncated = raw[PROGRESS], 0, False

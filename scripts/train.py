@@ -188,7 +188,8 @@ class Starts(gym.Wrapper):
 def make_env(game_dir, k, episode_steps, stall_steps, saved_starts, rewinds, traps=0.0, refresh=0.0, frontier=0.0,
              window=None, place=None, place_at=(), demos=None, demo_share=0.0, **env_kwargs):
     """env_kwargs: GoiEnv's action_cost, mouse and reward weights."""
-    env = Starts(GoiEnv(game_dir, k=k, stall_steps=stall_steps, **env_kwargs), saved_starts, rewinds, trap_share=traps,
+    env = Starts(GoiEnv(game_dir, k=k, stall_steps=stall_steps, snake_ends=True, **env_kwargs), saved_starts, rewinds,
+                 trap_share=traps,
                  trap_after=(stall_steps or 300) // 2, refresh=refresh, frontier=frontier, window=window, place=place,
                  place_at=place_at, demos=demos, demo_share=demo_share)
     return TimeLimit(env, episode_steps)
