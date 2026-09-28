@@ -1,6 +1,7 @@
 """Train PPO on Getting Over It: parallel games, normalized observations, TensorBoard logs, resumable checkpoints."""
 import argparse
 import os
+import pickle
 import re
 import time
 from contextlib import suppress
@@ -176,6 +177,32 @@ def act(model, obs, step, noise=1.0):
         dist = model.policy.get_distribution(model.policy.obs_to_tensor(obs)[0])
         mean = dist.distribution.mean
         return np.clip((mean + noise * (dist.get_actions() - mean)).cpu().numpy(), -1, 1)
+
+
+class Player:
+    """A checkpoint with its observation normalization, acting at an exploration noise scale (act): one game's raw
+    observation in, one action out."""
+
+    def __init__(self, checkpoint, noise=0.5):
+        self.model = PPO.load(checkpoint, device="cpu")
+        with open(vecnormalize_path(checkpoint), "rb") as f:
+            self.norm = pickle.load(f)
+        self.noise = noise
+
+    def __call__(self, obs, step):
+        return act(self.model, self.norm.normalize_obs(obs[None]), step, self.noise)[0]
+
+
+def chain(base, then=(), noise=0.5):
+    """A player made of checkpoints that take over by route progress: base, then each (from, checkpoint) from that
+    progress on. A specialist for a stretch hands back to the earlier player below it, e.g. after a fall."""
+    players = [(-np.inf, Player(base, noise))] + sorted(((f, Player(c, noise)) for f, c in then), key=lambda t: t[0])
+    return lambda obs, step: [p for f, p in players if obs[PROGRESS] >= f][-1](obs, step)
+
+
+def parse_then(specs):
+    """--then FROM:CHECKPOINT arguments as (from, checkpoint) pairs."""
+    return [(float(s.split(":", 1)[0]), s.split(":", 1)[1]) for s in specs]
 
 
 def warm_start(model, checkpoint):

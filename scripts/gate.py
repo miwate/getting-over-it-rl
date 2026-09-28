@@ -10,30 +10,15 @@ candidate only if it beats rw-control (ported: scripts/port.py) here without los
 """
 import argparse
 import os
-import pickle
 from concurrent.futures import ProcessPoolExecutor
 from itertools import repeat
 
 import torch
-from stable_baselines3 import PPO
 
 from goi_env import OBS_FIELDS, GoiEnv
-from train import STALL_SECONDS, act, vecnormalize_path
+from train import STALL_SECONDS, Player
 
 PROGRESS = OBS_FIELDS.index("progress")
-
-
-class Player:
-    """A checkpoint, its observation normalization and an exploration noise scale."""
-
-    def __init__(self, checkpoint, noise):
-        self.model = PPO.load(checkpoint, device="cpu")
-        with open(vecnormalize_path(checkpoint), "rb") as f:
-            self.norm = pickle.load(f)
-        self.noise = noise
-
-    def __call__(self, obs, step):
-        return act(self.model, self.norm.normalize_obs(obs[None]), step, self.noise)[0]
 
 
 def find_gate(game, finder, start, steps, games=3):
