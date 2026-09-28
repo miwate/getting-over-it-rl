@@ -186,14 +186,14 @@ class Game
 
     public void Drop(int id) => saves.Remove(id);
 
-    // Start somewhere along the route instead of the bottom: the start state with the pot at the route point `along`,
-    // `lift` higher, and the hammer swung about the hub to point at `angle` degrees, the cursor on its head. The rest of
-    // the level stays as at the start. False if the climber overlaps the level there: place again, or reset.
-    public bool Place(float along, float lift, float angle)
+    // Start somewhere along the route instead of the bottom: the start state with the pot at the route point `along`
+    // moved by (dx, lift), and the hammer swung about the hub to point at `angle` degrees, the cursor on its head. The
+    // rest of the level stays as at the start. False if the climber overlaps the level there: place again, or reset.
+    public bool Place(float along, float dx, float lift, float angle)
     {
         var s = start.Copy();
         int Index(Rigidbody2D b) => Array.IndexOf(bodies, b);
-        Vector2 shift = (Vector2)route.Interpolate(route.DistanceToTF(along)) + new Vector2(0, lift) - s.pos[Index(pot)];
+        Vector2 shift = (Vector2)route.Interpolate(route.DistanceToTF(along)) + new Vector2(dx, lift) - s.pos[Index(pot)];
         Vector2 hubAt = s.pos[Index(hub)] + shift;
         float turn = angle - Vector2.SignedAngle(Vector2.right, s.pos[Index(tip)] - s.pos[Index(hub)]);
         var spin = Quaternion.Euler(0, 0, turn);

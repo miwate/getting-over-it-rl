@@ -12,7 +12,7 @@ using UnityEngine;
 //   'r' reset -> obs            's' step(float mouseX, float mouseY) -> obs    'v' save_state -> int id
 //   'l' load_state(int id) -> obs, or empty for an unknown id                 'c' close -> empty, then the game quits
 //   'd' drop_state(int id) -> empty: frees a saved state
-//   'p' place(float along, float lift, float angle) -> obs, or empty if the climber overlaps the level there
+//   'p' place(float along, float dx, float lift, float angle) -> obs, or empty if the climber overlaps the level there
 //   'f' frame -> int width, int height, then RGB rows top-down: the image rendered after the last step (render on)
 class Server
 {
@@ -82,8 +82,8 @@ class Server
                         else Send(0);
                         break;
                     case 'p':
-                        Read(12);
-                        if (game.Place(Float(0), Float(4), Float(8))) SendObs(game);
+                        Read(16);
+                        if (game.Place(Float(0), Float(4), Float(8), Float(12))) SendObs(game);
                         else Send(0);
                         break;
                     case 'd':

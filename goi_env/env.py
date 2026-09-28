@@ -47,7 +47,8 @@ class GoiEnv(gym.Env):
     hole doesn't. With stall_ends=False the count starts over instead, so a test episode goes on and the policy still
     gets the stuck signal it trained with. Wrap in TimeLimit for a time limit.
     reset(options={"state": id}) starts an episode from a saved state instead of the bottom; {"place": distance} puts the
-    climber on the route there first (training starts beyond where the agent gets on its own).
+    climber on the route there first (training starts beyond where the agent gets on its own), and "dx" moves it
+    sideways from the route (where the route runs through a ledge the pot can only sit beside).
     """
 
     metadata = {"render_modes": ["human", "rgb_array"]}
@@ -89,7 +90,7 @@ class GoiEnv(gym.Env):
         super().reset(seed=seed)
         options = options or {}
         if "place" in options:
-            raw = self._place(options["place"])
+            raw = self._place(options["place"], options.get("dx", 0.0))
         else:
             raw = self.client.reset() if options.get("state") is None else self.client.load_state(options["state"])
         self.best_progress = self._stall_mark = self._progress = raw[PROGRESS]
@@ -137,12 +138,12 @@ class GoiEnv(gym.Env):
         self._actions = deque([(0.0, 0.0)] * PREV_ACTIONS, maxlen=PREV_ACTIONS)
         return self._observe(raw)
 
-    def _place(self, along, settle=30):
+    def _place(self, along, dx=0.0, settle=30):
         """The climber put just above the route at `along` (hammer up where it fits), then left to settle with a still
         mouse, so it lands on whatever is below."""
         for lift in (0.5, 1.0, 0.0, -0.5, 2.0, 3.0, 4.0):  # the route runs close under some ledges and over others
             for angle in (90, 60, 120, 30, 150, 0, 180, 210, 330, 240, 300, 270):
-                raw = self.client.place(along, lift, angle)
+                raw = self.client.place(along, lift, angle, dx)
                 if raw is not None:
                     for _ in range(settle):
                         raw = self.client.step(0.0, 0.0)
