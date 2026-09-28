@@ -270,6 +270,8 @@ def main():
     ap.add_argument("--save-every", type=int, default=500_000, help="checkpoint interval in environment steps")
     ap.add_argument("--resume", help="a checkpoint .zip to continue from, with its own settings")
     ap.add_argument("--warm-start", help="a checkpoint .zip whose weights and normalization start this run's settings")
+    ap.add_argument("--fresh-noise", action="store_true",
+                    help="with --warm-start: exploration noise back to its initial size (gSDE's shrank ~10x in long runs)")
     args = ap.parse_args()
     if not args.game_dir:
         ap.error("pass --game-dir or set GOI_GAME_DIR")
@@ -314,6 +316,9 @@ def main():
                         device=args.device, tensorboard_log=run_dir, verbose=1)
             if args.warm_start:
                 warm_start(model, args.warm_start)
+                if args.fresh_noise:
+                    with torch.no_grad():
+                        model.policy.log_std.fill_(policy_kwargs.get("log_std_init", 0.0))
         save = CheckpointCallback(max(args.save_every // args.envs, 1), checkpoints, name_prefix="ppo",
                                   save_vecnormalize=True)
         try:
