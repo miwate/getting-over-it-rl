@@ -2,7 +2,8 @@
 top-left corner (route progress >= 176), how often does a policy get onto the rock (190) within 15 s?
 
 A finder policy plays from the bottom with fixed seeds until it gets there, and that state is every candidate's start.
-One process per game with seeded noise, so every run rebuilds the same states (the bridge is bit-exact). Keep a
+One process per game with seeded noise, so every run rebuilds the same states (the bridge is bit-exact, except that a
+multi-contact moment can resolve differently in another game launch: judge candidates in one call). Keep a
 candidate only if it beats rw-control (ported: scripts/port.py) here without losing ground in full games (evaluate.py).
 
     python scripts/gate.py runs/rw-port/checkpoints/ppo_1500160_steps.zip other.zip other.zip@1
