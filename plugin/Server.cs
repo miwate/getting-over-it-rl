@@ -14,6 +14,7 @@ using UnityEngine;
 //   'l' load_state(int id) -> obs, or empty for an unknown id                 'c' close -> empty, then the game quits
 //   'd' drop_state(int id) -> empty: frees a saved state
 //   'p' place(float along, float dx, float lift, float angle) -> obs, or empty if the climber overlaps the level there
+//   'e' dump_engine(int tag) -> empty: the engine's live state to BepInEx/goi-rl-engine-state-<tag>.jsonl (debugging)
 //   'f' frame -> int width, int height, then RGB rows top-down: the image rendered after the last step (render on)
 class Server
 {
@@ -86,6 +87,11 @@ class Server
                         Read(16);
                         if (game.Place(Float(0), Float(4), Float(8), Float(12))) SendObs(game);
                         else Send(0);
+                        break;
+                    case 'e':
+                        Read(4);
+                        EngineDump.Write(Path.Combine(BepInEx.Paths.BepInExRootPath, $"goi-rl-engine-state-{Int(0)}.jsonl"), log);
+                        Send(0);
                         break;
                     case 'd':
                         Read(4);

@@ -123,6 +123,11 @@ class GoiClient:
         there (place again, or reset)."""
         return self._obs_call(b"p" + struct.pack("<ffff", along, dx, lift, angle))
 
+    def dump_engine(self, tag):
+        """Write the engine's live state (bodies, joints, colliders, settings) to BepInEx/goi-rl-engine-state-<tag>.jsonl,
+        to find what differs between two runs that should match. Derived from game data: never commit it."""
+        self._call(b"e" + struct.pack("<i", tag))
+
     def drop_state(self, state_id):
         """Free a saved state in the game (each holds ~1 KB there until dropped)."""
         self._call(b"d" + struct.pack("<i", state_id))
