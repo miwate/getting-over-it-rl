@@ -137,18 +137,11 @@ class Starts(gym.Wrapper):
         game = self.env.unwrapped
         z = np.load(path)
         for j, reached in enumerate(z["reached"]):
-            game.reset()
-            for a in z[f"climb{j}"]:
-                game.step(a)
-            start = game.save_state()
-            game.load_state(start)  # as when it was recorded: the try began from a load, which rebuilds the world
-            game.drop_state(start)
             kept, ok = [], False
-            for t, a in enumerate(z[f"try{j}"]):
-                if t >= reached - back and t % every == 0:
+            for t, obs, _ in demo_steps(game, z, j):
+                ok = ok or t == reached + 1 and obs[PROGRESS] >= z["goal"]
+                if reached - back <= t <= reached and t % every == 0:
                     kept.append(game.save_state())
-                obs, *_ = game.step(a)
-                ok = ok or t == reached and obs[PROGRESS] >= z["goal"]
             if ok:
                 self.demos += kept
             else:  # the replay went its own way (a multi-contact moment can resolve differently in another launch)
@@ -183,6 +176,30 @@ class Starts(gym.Wrapper):
                 if len(self.recent) > 4:
                     game.drop_state(self.recent.pop(0)[0])
         return obs, reward, terminated, truncated, {**info, "from_bottom": self.from_bottom, "rewinds": self.rewinds}
+
+
+def demo_steps(game, z, j):
+    """Replay demo j of a demos file (demos.py: a finder's climb from reset, then a try from a loaded state; explore.py:
+    a placement, then actions with loads where the explorer loaded saved states) in a GoiEnv. Yields (step,
+    observation, action), the observation being the one the action was taken from; last (steps, final observation,
+    None). A load rebuilds the physics world, so the replay loads at the same steps, which makes it exact."""
+    if f"place{j}" in z:
+        along, dx = z[f"place{j}"]
+        game.reset(options={"place": float(along), "dx": float(dx)})
+    else:
+        game.reset()
+        for a in z[f"climb{j}"]:
+            game.step(a)
+    cuts = set(z[f"cuts{j}"].tolist()) if f"cuts{j}" in z else {0}
+    obs = None
+    for t, a in enumerate(z[f"try{j}"]):
+        if t in cuts:
+            state = game.save_state()
+            obs = game.load_state(state)
+            game.drop_state(state)
+        yield t, obs, a
+        obs, *_ = game.step(a)
+    yield len(z[f"try{j}"]), obs, None
 
 
 def make_env(game_dir, k, episode_steps, stall_steps, saved_starts, rewinds, traps=0.0, refresh=0.0, frontier=0.0,

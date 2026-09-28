@@ -15,7 +15,7 @@ import torch
 from stable_baselines3 import PPO
 
 from goi_env import GoiEnv
-from train import vecnormalize_path
+from train import demo_steps, vecnormalize_path
 
 
 def main():
@@ -37,16 +37,11 @@ def main():
     X, A = [], []
     try:
         for j, reached in enumerate(z["reached"]):
-            game.reset()
-            for a in z[f"climb{j}"]:
-                game.step(a)
-            start = game.save_state()
-            obs = game.load_state(start)
-            game.drop_state(start)
-            for a in z[f"try{j}"][:int(reached) + 1]:
+            for t, obs, a in demo_steps(game, z, j):
+                if t > reached:
+                    break
                 X.append(norm.normalize_obs(obs[None])[0])
                 A.append(a)
-                obs, *_ = game.step(a)
     finally:
         game.close()
     X, A = torch.as_tensor(np.array(X)), torch.as_tensor(np.array(A))
