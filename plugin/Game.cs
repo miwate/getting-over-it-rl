@@ -44,6 +44,7 @@ class Game
     readonly ContactFilter2D solid;
     readonly Snapshot start;
     readonly Dictionary<int, Snapshot> saves = new Dictionary<int, Snapshot>(); // ~1 KB each, until dropped
+    readonly Collider2D[] overlap = new Collider2D[1];
     int nextSave;
     Camera[] cameras;
     Scene worldScene;
@@ -184,6 +185,34 @@ class Game
     }
 
     public void Drop(int id) => saves.Remove(id);
+
+    // Start somewhere along the route instead of the bottom: the start state with the pot at the route point `along`,
+    // `lift` higher, and the hammer swung about the hub to point at `angle` degrees, the cursor on its head. The rest of
+    // the level stays as at the start. False if the climber overlaps the level there: place again, or reset.
+    public bool Place(float along, float lift, float angle)
+    {
+        var s = start.Copy();
+        int Index(Rigidbody2D b) => Array.IndexOf(bodies, b);
+        Vector2 shift = (Vector2)route.Interpolate(route.DistanceToTF(along)) + new Vector2(0, lift) - s.pos[Index(pot)];
+        Vector2 hubAt = s.pos[Index(hub)] + shift;
+        float turn = angle - Vector2.SignedAngle(Vector2.right, s.pos[Index(tip)] - s.pos[Index(hub)]);
+        var spin = Quaternion.Euler(0, 0, turn);
+        for (int i = 0; i < bodies.Length; i++)
+        {
+            var t = bodies[i].transform;
+            if (!t.IsChildOf(player.transform)) continue;
+            s.pos[i] += shift;
+            if (!t.IsChildOf(arm.transform)) continue; // the hammer: the hub hinge's free end and everything under it
+            s.pos[i] = hubAt + (Vector2)(spin * (Vector3)(s.pos[i] - hubAt));
+            s.rot[i] += turn;
+            s.pose[i] = spin * s.pose[i];
+        }
+        s.pos[Index(cursor)] = s.mw = s.pos[Index(tip)];
+        Restore(s);
+        foreach (var c in player.GetComponentsInChildren<Collider2D>())
+            if (c.enabled && !c.isTrigger && c.OverlapCollider(solid, overlap) > 0) return false;
+        return true;
+    }
 
     public bool Load(int id)
     {
@@ -344,6 +373,13 @@ class Game
         public float simTime, giftTime, hingeSpeed, sliderSpeed, mouseSpeed;
         public bool won, mouseSnap, hammerSlide, potSlide, creditsUp, giftSpawned, giftOpened, lakeReset;
         public Collider2D[] hammerKeys, potKeys;
+
+        public Snapshot Copy()
+        {
+            var c = (Snapshot)MemberwiseClone();
+            c.pos = (Vector2[])pos.Clone(); c.rot = (float[])rot.Clone(); c.pose = (Quaternion[])pose.Clone();
+            return c;
+        }
     }
 
     // Private game fields that hold physics-relevant state.

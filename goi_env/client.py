@@ -116,6 +116,12 @@ class GoiClient:
             raise KeyError(f"unknown state id {state_id}")
         return obs
 
+    def place(self, along, lift=0.5, angle=90.0):
+        """Put the climber on the route at distance `along` instead of the bottom, the pot `lift` above the route point
+        and the hammer pointing at `angle` degrees; the rest of the level as at the start. None if it overlaps the level
+        there (place again, or reset)."""
+        return self._obs_call(b"p" + struct.pack("<fff", along, lift, angle))
+
     def drop_state(self, state_id):
         """Free a saved state in the game (each holds ~1 KB there until dropped)."""
         self._call(b"d" + struct.pack("<i", state_id))
