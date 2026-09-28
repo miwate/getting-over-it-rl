@@ -35,9 +35,9 @@ class Player:
         return act(self.model, self.norm.normalize_obs(obs[None]), step, self.noise)[0]
 
 
-def find_gate(game, finder, start, steps):
-    """Play from the bottom (up to three games of `steps`) until progress >= start; returns that state or None."""
-    for _ in range(3):
+def find_gate(game, finder, start, steps, games=3):
+    """Play from the bottom (up to `games` games of `steps`) until progress >= start; returns that state or None."""
+    for _ in range(games):
         obs, _ = game.reset()
         for step in range(steps):
             obs, _, terminated, _, _ = game.step(finder(obs, step))
@@ -70,7 +70,7 @@ def bench(seeds, candidates, args):
     try:
         for seed in seeds:
             torch.manual_seed(seed)
-            gate = find_gate(game, finder, args.start, int(100 * 120 / args.k))
+            gate = find_gate(game, finder, args.start, int(100 * 120 / args.k), args.finder_games)
             if gate is None:
                 continue
             out[seed] = []
@@ -93,6 +93,7 @@ def main():
     ap.add_argument("--finder", default=os.path.join("runs", "rw-port", "checkpoints", "ppo_1500160_steps.zip"),
                     help="the policy that plays up to the gate states (rw-control, ported)")
     ap.add_argument("--finder-noise", type=float, default=0.5)
+    ap.add_argument("--finder-games", type=int, default=3, help="100 s games the finder gets per state (more for far states)")
     ap.add_argument("--noise", type=float, default=0.5, help="candidates' exploration noise scale (train.act)")
     ap.add_argument("--states", type=int, default=16, help="gate states (seeds --seed, --seed + 1, ...)")
     ap.add_argument("--seed", type=int, default=0, help="first state's seed; another one gives independent states")
