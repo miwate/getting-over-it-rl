@@ -48,19 +48,21 @@ def find_gate(game, finder, start, steps, games=3):
     return None
 
 
-def crosses(game, player, gate, steps, goal):
+def try_from(game, player, gate, steps, goal):
+    """One try's best progress; it stops at the goal."""
     obs = game.load_state(gate)
+    best = obs[PROGRESS]
     for step in range(steps):
         obs, _, terminated, _, _ = game.step(player(obs, step))
-        if obs[PROGRESS] >= goal:
-            return True
-        if terminated:
-            return False
-    return False
+        best = max(best, obs[PROGRESS])
+        if best >= goal or terminated:
+            break
+    return best
 
 
 def bench(seeds, candidates, args):
-    """One game: a gate state per seed, then every candidate's tries from it. Returns {seed: [wins per candidate]}."""
+    """One game: a gate state per seed, then every candidate's tries from it. Returns {seed: (the state's progress,
+    [each candidate's best progress per try])}."""
     torch.set_num_threads(1)
     finder = Player(args.finder, args.finder_noise)
     players = [Player(path, noise) for path, noise in candidates]
@@ -70,16 +72,23 @@ def bench(seeds, candidates, args):
     try:
         for seed in seeds:
             torch.manual_seed(seed)
-            gate = find_gate(game, finder, args.start, int(100 * 120 / args.k), args.finder_games)
+            if args.place:  # placed along the route instead: for stretches the finder can't reach
+                try:
+                    game.reset(options={"place": args.start + 0.5 * (seed - args.seed)})
+                    gate = game.save_state()
+                except ValueError:
+                    gate = None
+            else:
+                gate = find_gate(game, finder, args.start, int(100 * 120 / args.k), args.finder_games)
             if gate is None:
                 continue
-            out[seed] = []
+            out[seed] = (game.load_state(gate)[PROGRESS], [])
             for player in players:
-                wins = 0
+                bests = []
                 for i in range(args.tries):
                     torch.manual_seed(seed * 1000 + i)
-                    wins += crosses(game, player, gate, steps, args.goal)
-                out[seed].append(wins)
+                    bests.append(try_from(game, player, gate, steps, args.goal))
+                out[seed][1].append(bests)
             game.drop_state(gate)
     finally:
         game.close()
@@ -94,6 +103,8 @@ def main():
                     help="the policy that plays up to the gate states (rw-control, ported)")
     ap.add_argument("--finder-noise", type=float, default=0.5)
     ap.add_argument("--finder-games", type=int, default=3, help="100 s games the finder gets per state (more for far states)")
+    ap.add_argument("--place", action="store_true",
+                    help="place the climber at --start, --start + 0.5, ... (one per state) instead of using the finder")
     ap.add_argument("--noise", type=float, default=0.5, help="candidates' exploration noise scale (train.act)")
     ap.add_argument("--states", type=int, default=16, help="gate states (seeds --seed, --seed + 1, ...)")
     ap.add_argument("--seed", type=int, default=0, help="first state's seed; another one gives independent states")
@@ -120,8 +131,9 @@ def main():
     print(f"{len(seeds)} of {args.states} gate states (progress >= {args.start:.0f}); {args.tries} tries of "
           f"{args.seconds:.0f} s each; success = reaching {args.goal:.0f}")
     for c, (path, noise) in enumerate(candidates):
-        wins = [results[s][c] for s in seeds]
-        print(f"  {sum(wins):4d}/{total} = {sum(wins) / max(total, 1):4.0%}  noise {noise:<4g} {path}")
+        wins = [sum(b >= args.goal for b in results[s][1][c]) for s in seeds]
+        gain = sum(b - results[s][0] for s in seeds for b in results[s][1][c]) / max(total, 1)
+        print(f"  {sum(wins):4d}/{total} = {sum(wins) / max(total, 1):4.0%}  mean gain {gain:4.1f}  noise {noise:<4g} {path}")
         print(f"        per state: {' '.join(map(str, wins))}")
 
 
