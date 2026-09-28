@@ -132,7 +132,8 @@ class GoiEnv(gym.Env):
     def load_state(self, state_id):
         raw = self.client.load_state(state_id)
         self.best_progress = self._saved_best[state_id]
-        self._progress = raw[PROGRESS]
+        self._progress = self._stall_mark = raw[PROGRESS]
+        self.stalled = 0  # a fresh try: the stuck signal mustn't carry over from whatever ran before
         self._actions = deque([(0.0, 0.0)] * PREV_ACTIONS, maxlen=PREV_ACTIONS)
         return self._observe(raw)
 
