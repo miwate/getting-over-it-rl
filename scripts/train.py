@@ -45,14 +45,16 @@ class Starts(gym.Wrapper):
     strokes escape abl-oldhp's traps at the steep climb 10-30% of the time where the policy itself escaped 0 of 10.
 
     With `window` (lo, hi), saved starts come only from that stretch of route progress, to focus practice on one part.
+    With `place` (lo, hi), the saved starts are first seeded with the climber placed on the route every bin_size along
+    that stretch (GoiEnv's place), so practice can begin where the agent has never been.
 
     Infos carry from_bottom and rewinds (1 or 0). Bottom starts without rewinds play the real game.
     """
 
     def __init__(self, env, saved_share=0.5, rewind_share=0.5, bin_size=2.0, fall=5.0, every=30, max_retries=3,
-                 trap_share=0.0, trap_after=150, pool=30, refresh=0.0, frontier=0.0, window=None):
+                 trap_share=0.0, trap_after=150, pool=30, refresh=0.0, frontier=0.0, window=None, place=None):
         super().__init__(env)
-        self.refresh, self.frontier, self.window, self.bin = refresh, frontier, window, None
+        self.refresh, self.frontier, self.window, self.place, self.bin = refresh, frontier, window, place, None
         self.saved_share, self.rewind_share, self.bin_size = saved_share, rewind_share, bin_size
         self.trap_share, self.trap_after, self.pool = trap_share, trap_after, pool
         self.traps = []    # state ids of recent traps, oldest first
@@ -66,6 +68,9 @@ class Starts(gym.Wrapper):
 
     def reset(self, *, seed=None, options=None):
         game = self.env.unwrapped
+        if self.place:
+            self._seed_bins(*self.place)
+            self.place = None
         options = dict(options or {})
         for state, _ in self.recent:
             game.drop_state(state)
@@ -102,6 +107,17 @@ class Starts(gym.Wrapper):
         self.t = 0
         return obs, {**info, "from_bottom": self.from_bottom, "rewinds": self.rewinds}
 
+    def _seed_bins(self, lo, hi):
+        game = self.env.unwrapped
+        for along in np.arange(lo, hi, self.bin_size):
+            try:
+                obs, _ = game.reset(options={"place": float(along)})
+            except ValueError:  # nowhere to fit, e.g. where the route passes through a ledge's end
+                continue
+            b = int(obs[PROGRESS] // self.bin_size)  # where it settled
+            if b not in self.bins and (obs[HEAD] or obs[POT]):
+                self.bins[b] = [game.save_state(), 0]
+
     def step(self, action):
         obs, reward, terminated, truncated, info = self.env.step(action)
         game = self.env.unwrapped
@@ -133,10 +149,10 @@ class Starts(gym.Wrapper):
 
 
 def make_env(game_dir, k, episode_steps, stall_steps, saved_starts, rewinds, traps=0.0, refresh=0.0, frontier=0.0,
-             window=None, **env_kwargs):
+             window=None, place=None, **env_kwargs):
     """env_kwargs: GoiEnv's action_cost, mouse and reward weights."""
     env = Starts(GoiEnv(game_dir, k=k, stall_steps=stall_steps, **env_kwargs), saved_starts, rewinds, trap_share=traps,
-                 trap_after=(stall_steps or 300) // 2, refresh=refresh, frontier=frontier, window=window)
+                 trap_after=(stall_steps or 300) // 2, refresh=refresh, frontier=frontier, window=window, place=place)
     return TimeLimit(env, episode_steps)
 
 
@@ -223,6 +239,8 @@ def main():
                     help="share of episodes that start from states where an episode was stuck (no headway for half the stall time)")
     ap.add_argument("--window", type=float, nargs=2, metavar=("LO", "HI"),
                     help="saved starts only from this stretch of route progress (the chimney top: 170 200)")
+    ap.add_argument("--place", type=float, nargs=2, metavar=("LO", "HI"),
+                    help="seed the saved starts with the climber placed along this stretch of the route")
     # Defaults: abl-oldhp's settings, the best of the 2M-step experiments (docs/RECON.md, "Settings experiments").
     ap.add_argument("--lr", type=float, default=3e-4, help="learning rate")
     ap.add_argument("--lr-end", type=float, help="decay the learning rate linearly to this by the end of the run")
@@ -262,7 +280,7 @@ def main():
     env_kwargs = dict(action_cost=args.action_cost, mouse=args.mouse, recovery=args.recovery, regress=args.regress,
                       air_bonus=args.air_bonus, speed_bonus=args.speed_bonus)
     envs = [partial(make_env, args.game_dir, args.k, args.episode_steps, stall_steps, args.saved_starts,
-                    args.rewinds, args.traps, args.refresh, args.frontier, args.window, **env_kwargs)] * args.envs
+                    args.rewinds, args.traps, args.refresh, args.frontier, args.window, args.place, **env_kwargs)] * args.envs
     venv = VecMonitor(SubprocVecEnv(envs), info_keywords=("best_progress", "from_bottom", "rewinds"))
     try:
         if args.resume:
