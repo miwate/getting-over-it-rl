@@ -98,7 +98,8 @@ class GoiClient:
     def configure(self, k=4, n_rays=16, ray_length=10.0, render=False, width=0, height=0):
         """k physics steps (1/120 s each) per action; width/height 0 keeps the window size."""
         self.obs_size = self._int(b"k" + struct.pack("<iifiii", k, n_rays, ray_length, int(render), width, height))
-        self._obs = struct.Struct(f"<{self.obs_size}f")
+        self._obs = struct.Struct(f"<{self.obs_size + 1}f")  # then a status: 1 while the pot touches the Snake
+        self.on_snake = False
         return self.obs_size
 
     def reset(self):
@@ -156,7 +157,11 @@ class GoiClient:
 
     def _obs_call(self, msg):
         data = self._call(msg)
-        return self._obs.unpack(data) if data else None
+        if not data:
+            return None
+        *obs, snake = self._obs.unpack(data)
+        self.on_snake = snake > 0
+        return tuple(obs)
 
     def _int(self, msg):
         return struct.unpack("<i", self._call(msg))[0]

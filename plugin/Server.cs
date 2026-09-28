@@ -8,6 +8,7 @@ using UnityEngine;
 // Lockstep protocol on 127.0.0.1, little-endian. A game serves one client session and quits when it ends, so a
 // crashed or interrupted trainer never leaves games running (and BepInEx allows only 5 per install).
 // Request: 1 command byte + fixed-size payload. Response: int32 byte count + payload (float32 obs, or int32s).
+// Every obs is followed by one float32 status: 1 while the pot touches the Snake (the chute back to the start).
 //   'k' configure(int k, int rays, float rayLength, int render, int width, int height) -> int obs length
 //   'r' reset -> obs            's' step(float mouseX, float mouseY) -> obs    'v' save_state -> int id
 //   'l' load_state(int id) -> obs, or empty for an unknown id                 'c' close -> empty, then the game quits
@@ -57,7 +58,7 @@ class Server
                     case 'k':
                         Read(24);
                         game.K = Mathf.Clamp(Int(0), 1, 10000);
-                        game.RayCount = Mathf.Clamp(Int(4), 0, obs.Length - Game.ObsFields);
+                        game.RayCount = Mathf.Clamp(Int(4), 0, obs.Length - Game.ObsFields - 1);
                         game.RayLength = Mathf.Max(Float(8), 0.01f);
                         game.SetRender(Int(12) != 0);
                         if (Int(16) > 0 && Int(20) > 0) Screen.SetResolution(Int(16), Int(20), FullScreenMode.Windowed);

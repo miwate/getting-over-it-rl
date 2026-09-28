@@ -34,6 +34,8 @@ class Game
     readonly CameraControl cam;
     readonly CraneMove craneMove;
     readonly CurvySpline route; // the level route ProgressMeter measures progress along
+    readonly Teleporter[] teleporters; // the space zone's two sides, which wrap the climber sideways
+    readonly Collider2D snake;         // a frictionless chute from beside the bucket down to the start
     readonly Rigidbody2D pot, hub, arm, tip, cursor, crane;
     readonly Vector2 craneStart;
     readonly Rigidbody2D[] bodies;       // every body in the level, in a fixed order
@@ -72,6 +74,8 @@ class Game
         craneMove = Object.FindObjectOfType<CraneMove>();
         crane = craneMove.GetComponent<Rigidbody2D>();
         route = Object.FindObjectOfType<ProgressMeter>().GetComponent<CurvySpline>();
+        teleporters = InLevel<Teleporter>();
+        snake = GameObject.Find("Snake").GetComponent<Collider2D>();
         craneStart = crane.position;
         bodies = InLevel<Rigidbody2D>();
         gift = InLevel<OpenGift>().Single(); // inactive until the gift spawns
@@ -89,6 +93,7 @@ class Game
         start = Capture();
         start.mw = tip.position; // what the scripts' Start() would set
         start.hammerSlide = start.potSlide = true;
+        for (int i = 0; i < teleporters.Length; i++) start.teleport[3 * i + 2] = true; // enableTeleport
     }
 
     // Once the game has finished its own loading (save or intro), take over physics and reset.
@@ -97,6 +102,7 @@ class Game
         if (ready) return true;
         if (!pc.loadFinished) return false;
         pc.enabled = hammer.enabled = potSounds.enabled = craneMove.enabled = false;
+        foreach (var t in teleporters) t.enabled = false; // Step() wraps the climber; their triggers still report
         pose.enabled = false; // its per-frame write to Player/Hub's Transform nudges the bodies; Step() runs it instead
         pc.trackpad = false;  // the game applies the player's own mouse settings; RL games use the mouse defaults
         F.Sensitivity.SetValue(pc, 1f);
@@ -130,6 +136,7 @@ class Game
             crane.MovePosition(new Vector2(craneStart.x + Mathf.Sin(simTime) * 0.01f, craneStart.y)); // CraneMove, on sim time
             if (!world.Simulate(dt)) throw new InvalidOperationException("PhysicsScene2D.Simulate did not run");
             if (lake.resetting) lake.CancelInvoke(); // fell in the lake: the flag ends the episode; the game's own reset must not fire
+            foreach (var t in teleporters) Teleport(t);
             if (Render) cam.FixedUpdate();           // the camera follows on sim time
         }
         // The character's arm pose, once per action in every mode, so rendering never changes the physics. It also puts the
@@ -140,6 +147,29 @@ class Game
         hub.transform.position = hubAt;
     }
 
+    // What a Teleporter's LateUpdate does, on sim time right after the physics step whose trigger asked for it (the game
+    // does it on the frame clock, and moves Camera.main, which doesn't exist with rendering off): the climber and the
+    // cursor jump to the other side's x, and that side ignores the arrival until the climber leaves it.
+    void Teleport(Teleporter t)
+    {
+        if (t.shouldEnable)
+        {
+            t.enableTeleport = true;
+            t.shouldEnable = false;
+        }
+        if (!t.shouldTeleport) return;
+        t.targetX.GetComponent<Teleporter>().enableTeleport = false;
+        var shift = new Vector3(t.targetX.position.x - player.transform.position.x, 0, 0);
+        player.transform.position += shift;
+        t.cursor.position += shift;
+        Physics2D.SyncTransforms();
+        if (Render) cam.Teleport(pot.position);
+        t.shouldTeleport = false;
+        t.enableTeleport = false;
+        t.shouldEnable = true;
+    }
+
+    // The observation, then one status value that isn't part of it: 1 while the pot touches the Snake.
     public int Observe(float[] o)
     {
         // Hammer rates come from body velocities: Unity's joint-speed getters spike to nonsense under manual stepping.
@@ -172,7 +202,8 @@ class Game
             var hit = world.Raycast(p, new Vector2(Mathf.Cos(a), Mathf.Sin(a)), RayLength, solid);
             o[ObsFields + i] = hit ? hit.distance : RayLength;
         }
-        return ObsFields + RayCount;
+        o[ObsFields + RayCount] = pot.IsTouching(snake) ? 1 : 0;
+        return ObsFields + RayCount + 1;
     }
 
     public void Reset() => Restore(start);
@@ -264,6 +295,7 @@ class Game
         s.giftSpawned = (bool)F.GiftSpawned.GetValue(giftSpawner);
         s.giftOpened = (bool)F.GiftOpened.GetValue(gift);
         s.lakeReset = lake.resetting;
+        s.teleport = teleporters.SelectMany(t => new[] { t.shouldTeleport, t.shouldEnable, t.enableTeleport }).ToArray();
         return s;
     }
 
@@ -332,6 +364,12 @@ class Game
         F.GiftOpened.SetValue(gift, s.giftOpened);
         lake.resetting = s.lakeReset;
         lake.CancelInvoke();
+        for (int i = 0; i < teleporters.Length; i++)
+        {
+            teleporters[i].shouldTeleport = s.teleport[3 * i];
+            teleporters[i].shouldEnable = s.teleport[3 * i + 1];
+            teleporters[i].enableTeleport = s.teleport[3 * i + 2];
+        }
         F.FadeIn.SetValue(cam, 0); // clear the lake's fade-to-red
         F.FadeOut.SetValue(cam, 0);
         F.FadeAlpha.SetValue(cam, 0f);
@@ -372,6 +410,7 @@ class Game
         public Vector2 gravity, mw, mouseInput, oldMouse;
         public float simTime, giftTime, hingeSpeed, sliderSpeed, mouseSpeed;
         public bool won, mouseSnap, hammerSlide, potSlide, creditsUp, giftSpawned, giftOpened, lakeReset;
+        public bool[] teleport; // per teleporter: shouldTeleport, shouldEnable, enableTeleport
         public Collider2D[] hammerKeys, potKeys;
 
         public Snapshot Copy()
