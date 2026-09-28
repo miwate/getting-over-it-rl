@@ -50,12 +50,17 @@ class Starts(gym.Wrapper):
     that stretch (GoiEnv's place), so practice can begin where the agent has never been; `place_at` adds (distance, dx)
     spots beside the route, where it runs through a ledge the pot can only sit next to.
 
+    Demos (backplay, Resnick et al. 2018): each game replays the demonstrations in `demos` (scripts/demos.py: a
+    policy's own rare successes at a hard move) and keeps a state every third of a second over the last 10 s before
+    each success; a share of episodes start from one, so the agent practices the move from where it nearly succeeds.
+
     Infos carry from_bottom and rewinds (1 or 0). Bottom starts without rewinds play the real game.
     """
 
     def __init__(self, env, saved_share=0.5, rewind_share=0.5, bin_size=2.0, fall=5.0, every=30, max_retries=3,
-                 trap_share=0.0, trap_after=150, pool=30, refresh=0.0, frontier=0.0, window=None, place=None, place_at=()):
+                 trap_share=0.0, trap_after=150, pool=30, refresh=0.0, frontier=0.0, window=None, place=None, place_at=(), demos=None, demo_share=0.0):
         super().__init__(env)
+        self.demo_path, self.demo_share, self.demos = demos, demo_share, []  # demo state ids
         self.refresh, self.frontier, self.window, self.bin = refresh, frontier, window, None
         self.place = [(a, 0.0) for a in np.arange(*place, bin_size)] if place else []
         self.place += list(place_at)
@@ -75,12 +80,15 @@ class Starts(gym.Wrapper):
         if self.place:
             self._seed_bins(self.place)
             self.place = []
+        if self.demo_path:
+            self._seed_demos(self.demo_path)
+            self.demo_path = None
         options = dict(options or {})
         for state, _ in self.recent:
             game.drop_state(state)
         self.recent = []
         self.from_bottom = 0
-        self.start = "bottom"  # what this episode starts from: bottom, bin, trap or retry
+        self.start = "bottom"  # what this episode starts from: bottom, bin, trap, demo or retry
         if self.retry is not None:
             options["state"] = self.retry
             self.retries += 1
@@ -93,7 +101,10 @@ class Starts(gym.Wrapper):
             if self.traps and r < self.trap_share:
                 options["state"] = self.traps[self.rng.integers(len(self.traps))]
                 self.start = "trap"
-            elif bins and r < self.trap_share + self.saved_share:
+            elif self.demos and r < self.trap_share + self.demo_share:
+                options["state"] = self.demos[self.rng.integers(len(self.demos))]
+                self.start = "demo"
+            elif bins and r < self.trap_share + self.demo_share + self.saved_share:
                 weights = np.array([1 / np.sqrt(1 + self.bins[b][1]) for b in bins])
                 if self.frontier:
                     weights *= np.exp((np.array(bins) - max(bins)) / self.frontier)
@@ -121,6 +132,28 @@ class Starts(gym.Wrapper):
             b = int(obs[PROGRESS] // self.bin_size)  # where it settled
             if b not in self.bins and (obs[HEAD] or obs[POT]):
                 self.bins[b] = [game.save_state(), 0]
+
+    def _seed_demos(self, path, back=300, every=10):
+        game = self.env.unwrapped
+        z = np.load(path)
+        for j, reached in enumerate(z["reached"]):
+            game.reset()
+            for a in z[f"climb{j}"]:
+                game.step(a)
+            start = game.save_state()
+            game.load_state(start)  # as when it was recorded: the try began from a load, which rebuilds the world
+            game.drop_state(start)
+            kept, ok = [], False
+            for t, a in enumerate(z[f"try{j}"]):
+                if t >= reached - back and t % every == 0:
+                    kept.append(game.save_state())
+                obs, *_ = game.step(a)
+                ok = ok or t == reached and obs[PROGRESS] >= z["goal"]
+            if ok:
+                self.demos += kept
+            else:  # the replay went its own way (a multi-contact moment can resolve differently in another launch)
+                for s in kept:
+                    game.drop_state(s)
 
     def step(self, action):
         obs, reward, terminated, truncated, info = self.env.step(action)
@@ -153,11 +186,11 @@ class Starts(gym.Wrapper):
 
 
 def make_env(game_dir, k, episode_steps, stall_steps, saved_starts, rewinds, traps=0.0, refresh=0.0, frontier=0.0,
-             window=None, place=None, place_at=(), **env_kwargs):
+             window=None, place=None, place_at=(), demos=None, demo_share=0.0, **env_kwargs):
     """env_kwargs: GoiEnv's action_cost, mouse and reward weights."""
     env = Starts(GoiEnv(game_dir, k=k, stall_steps=stall_steps, **env_kwargs), saved_starts, rewinds, trap_share=traps,
                  trap_after=(stall_steps or 300) // 2, refresh=refresh, frontier=frontier, window=window, place=place,
-                 place_at=place_at)
+                 place_at=place_at, demos=demos, demo_share=demo_share)
     return TimeLimit(env, episode_steps)
 
 
@@ -272,6 +305,8 @@ def main():
                     help="saved starts only from this stretch of route progress (the chimney top: 170 200)")
     ap.add_argument("--place", type=float, nargs=2, metavar=("LO", "HI"),
                     help="seed the saved starts with the climber placed along this stretch of the route")
+    ap.add_argument("--demos", help="demonstrations to start episodes along (scripts/demos.py)")
+    ap.add_argument("--demo-share", type=float, default=0.3, help="with --demos: share of episodes that start along one")
     ap.add_argument("--place-at", nargs="+", default=[], metavar="ALONG:DX",
                     help="also seed placed starts at these route distances, moved sideways by DX (e.g. 226:1.2)")
     # Defaults: abl-oldhp's settings, the best of the 2M-step experiments (docs/RECON.md, "Settings experiments").
@@ -316,7 +351,8 @@ def main():
                       air_bonus=args.air_bonus, speed_bonus=args.speed_bonus)
     envs = [partial(make_env, args.game_dir, args.k, args.episode_steps, stall_steps, args.saved_starts,
                     args.rewinds, args.traps, args.refresh, args.frontier, args.window, args.place,
-                    [tuple(map(float, spot.split(":"))) for spot in args.place_at], **env_kwargs)] * args.envs
+                    [tuple(map(float, spot.split(":"))) for spot in args.place_at], args.demos, args.demo_share,
+                    **env_kwargs)] * args.envs
     venv = VecMonitor(SubprocVecEnv(envs), info_keywords=("best_progress", "from_bottom", "rewinds"))
     try:
         if args.resume:
