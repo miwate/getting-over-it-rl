@@ -39,6 +39,8 @@ class Game
     readonly Rigidbody2D pot, hub, arm, tip, cursor, crane;
     readonly Vector2 craneStart;
     readonly Rigidbody2D[] bodies;       // every body in the level, in a fixed order
+    readonly HingeJoint2D[] hinges;      // every hinge in the level, parents before children
+    readonly int[][] hingeBodies;        // per hinge: its body, its connected body, then every body hanging from that
     readonly GameObject[] physicsRoots;  // every root holding 2D physics; moved into a fresh physics world on restore
     readonly GameObject[] physicsObjects; // top-most objects with 2D physics, in path order: re-created in this order
     readonly Action hammerFixedUpdate, potFixedUpdate, controlFixedUpdate, poseLateUpdate;
@@ -78,6 +80,10 @@ class Game
         snake = GameObject.Find("Snake").GetComponent<Collider2D>();
         craneStart = crane.position;
         bodies = InLevel<Rigidbody2D>();
+        hinges = InLevel<HingeJoint2D>();
+        hingeBodies = hinges.Select(h => new[] { Array.IndexOf(bodies, h.attachedRigidbody), Array.IndexOf(bodies, h.connectedBody) }
+            .Concat(Enumerable.Range(0, bodies.Length).Where(i => h.connectedBody != null && bodies[i] != h.connectedBody
+                && bodies[i].transform.IsChildOf(h.connectedBody.transform))).ToArray()).ToArray();
         gift = InLevel<OpenGift>().Single(); // inactive until the gift spawns
         physicsRoots = player.scene.GetRootGameObjects()
             .Where(r => r.GetComponentInChildren<Collider2D>(true) != null || r.GetComponentInChildren<Rigidbody2D>(true) != null).ToArray();
@@ -228,6 +234,8 @@ class Game
         Vector2 hubAt = s.pos[Index(hub)] + shift;
         float turn = angle - Vector2.SignedAngle(Vector2.right, s.pos[Index(tip)] - s.pos[Index(hub)]);
         var spin = Quaternion.Euler(0, 0, turn);
+        s.hingeAngle = (float[])s.hingeAngle.Clone();
+        s.hingeAngle[Array.IndexOf(hinges, pc.hj)] += turn; // the hammer's hinge turns with it
         for (int i = 0; i < bodies.Length; i++)
         {
             var t = bodies[i].transform;
@@ -296,6 +304,7 @@ class Game
         s.giftOpened = (bool)F.GiftOpened.GetValue(gift);
         s.lakeReset = lake.resetting;
         s.teleport = teleporters.SelectMany(t => new[] { t.shouldTeleport, t.shouldEnable, t.enableTeleport }).ToArray();
+        s.hingeAngle = hinges.Select(h => h.jointAngle).ToArray();
         return s;
     }
 
@@ -311,6 +320,21 @@ class Game
         potFixedUpdate();
         for (int i = 0; i < bodies.Length; i++)
             if (bodies[i].gameObject.activeSelf != s.active[i]) bodies[i].gameObject.SetActive(s.active[i]);
+        // A hinge re-created on re-activation keeps its joint angle and re-derives its reference angle from its bodies'
+        // Transform angles, which are wrapped to +-180: the reference then depends on the angle it had before, and a
+        // hammer spun a full turn in the last run shifts it by 360 (the controller's motor math subtracts it, so it
+        // rounds differently, and a limited hinge would jump). So first turn each hinge's hanging part, as one piece,
+        // until the angle it carries over re-creates the saved joint angle once the saved rotations are set.
+        for (int k = 0; k < hinges.Length; k++)
+        {
+            var h = hinges[k];
+            int[] ib = hingeBodies[k];
+            if (!h.isActiveAndEnabled || ib[1] < 0) continue;
+            float a = s.rot[ib[0]], b = s.rot[ib[1]];
+            float carried = Wrap(b) - Wrap(a) - (b - a - s.hingeAngle[k]);
+            float turn = carried - h.jointAngle;
+            if (turn != 0) foreach (int i in ib.Skip(1)) bodies[i].rotation += turn;
+        }
         var active = physicsObjects.Select(g => g.activeSelf).ToArray();
         foreach (var g in physicsObjects) g.SetActive(false);
         // Saved poses before re-creation, parents before children. Depth too: it isn't 2D physics, but Unity bakes the
@@ -376,6 +400,8 @@ class Game
         if (Render) cam.Teleport(pot.position);
     }
 
+    static float Wrap(float degrees) => degrees - 360f * Mathf.Round(degrees / 360f);
+
     static void SetContacts(object script, FieldInfo slide, FieldInfo points, FieldInfo buffer, bool sliding, Collider2D[] keys)
     {
         slide.SetValue(script, sliding);
@@ -411,6 +437,7 @@ class Game
         public float simTime, giftTime, hingeSpeed, sliderSpeed, mouseSpeed;
         public bool won, mouseSnap, hammerSlide, potSlide, creditsUp, giftSpawned, giftOpened, lakeReset;
         public bool[] teleport; // per teleporter: shouldTeleport, shouldEnable, enableTeleport
+        public float[] hingeAngle; // per hinge: its joint angle
         public Collider2D[] hammerKeys, potKeys;
 
         public Snapshot Copy()
