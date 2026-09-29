@@ -6,11 +6,14 @@ goes back to where it reached its best; gaining ground relaxes it again. Still w
 --explore-after seconds (the 2 s futures are too short-sighted to climb a pile), it runs a Go-Explore (explore.py)
 from where it is, and plays the path that gets --explore-gain past the best. The path to the best (or the win) is saved
 as a demo from the bottom (replayable: train.demo_steps; `trace` is the progress after each of its steps, to check a
-replay) and every committed step is a label for distill.py.
+replay) and every committed step is a label for distill.py. Paths replay exactly across launches, so a game can start
+from another climb's path (--start-from) or take over the leading game's when far behind (--adopt): all games then
+work at the frontier, each with its own random choices.
 
     python scripts/climb.py runs/rw-port/checkpoints/ppo_1500160_steps.zip --then 224:runs/bar-sil/checkpoints/ppo_7_steps.zip --out runs/climbs/a
 """
 import argparse
+import glob
 import os
 from concurrent.futures import ProcessPoolExecutor
 
@@ -46,15 +49,39 @@ def climb(seed, args):
             game.drop_state(peak[0])
         peak = (game.save_state(), path[:], trace[:], cuts[:])
 
-    def save():  # the path to the win, else to the best so far
+    def save():  # the path to the win, else to the best so far (whole files only: other games read them to adopt)
         steps, progress, loads = (path, trace, cuts) if won or not peak else peak[1:]
-        np.savez(out, reached=np.array([len(steps) - 1]), goal=best, climb0=np.zeros((0, 2), np.float32),
+        np.savez(out + ".tmp.npz", reached=np.array([len(steps) - 1]), goal=best, climb0=np.zeros((0, 2), np.float32),
                  try0=np.array(steps, np.float32).reshape(-1, 2), cuts0=np.array(loads), obs=np.array(X, np.float32),
                  actions=np.array(A, np.float32), timeline=np.array(timeline, np.float32),
                  trace=np.array(progress, np.float32))
+        os.replace(out + ".tmp.npz", out)
 
+    def adopt(file):  # take over a saved path (paths replay exactly across launches) and climb on from its end
+        nonlocal obs, path, trace, cuts, history, since, effort, gained
+        z = np.load(file)
+        _, parted, _, end = replay(game, z)
+        if parted is not None:  # back to our own best
+            print(f"game {seed}: {file} parted at {parted / 30:.1f} s; not adopted", flush=True)
+            if peak:
+                obs = game.load_state(peak[0])
+                path, trace, cuts = peak[1][:], peak[2][:], peak[3][:]
+            else:
+                obs, _ = game.reset()
+            return
+        for st, *_ in history:
+            game.drop_state(st)
+        obs, history = end, []
+        path, trace, cuts = list(z["try0"]), list(z["trace"]), list(z["cuts0"])
+        mark_best()
+        since, effort, gained = 0, 0, decision
+        print(f"game {seed}: adopted {file} at {best:.1f}", flush=True)
+
+    decision = 0
     try:
         obs, _ = game.reset()
+        if args.start_from:
+            adopt(args.start_from)
         for decision in range(int(args.minutes * 60 * 30 / args.commit)):
             state = game.save_state()
             history.append((state, len(path), float(obs[PROGRESS])))
@@ -127,12 +154,23 @@ def climb(seed, args):
                       f"furthest {info['furthest']:.1f}"), flush=True)
             if decision % 200 == 0:
                 save()
+                if args.adopt:  # far behind the leading game: take over its path
+                    leads = []
+                    for f in glob.glob(f"{args.out}-*.npz"):
+                        if f.endswith(".tmp.npz") or os.path.abspath(f) == os.path.abspath(out):
+                            continue
+                        try:
+                            leads.append((float(np.load(f)["goal"]), f))
+                        except (OSError, ValueError, KeyError):
+                            pass  # being written
+                    if leads and max(leads)[0] > best + args.adopt:
+                        adopt(max(leads)[1])
     finally:
         save()
         if args.video:  # in this game: a fresh one can part from the path (replay.py)
             try:
                 game.start_rendering()
-                _, parted, _ = replay(game, np.load(out), video=out[:-4] + ".mp4")
+                _, parted, _, _ = replay(game, np.load(out), video=out[:-4] + ".mp4")
                 print(f"game {seed}: video {'matches its path' if parted is None else f'parted at {parted / 30:.1f} s'}")
             except Exception as e:
                 print(f"game {seed}: no video ({e!r})")
@@ -159,6 +197,9 @@ def main():
     ap.add_argument("--robust", type=int, default=0, help="noisy plays that score each of the best futures (plan.py)")
     ap.add_argument("--robust-top", type=int, default=8)
     ap.add_argument("--sigma", type=float, default=0.05)
+    ap.add_argument("--start-from", help="a climb's .npz: replay its path, then climb on from its end")
+    ap.add_argument("--adopt", type=float, default=0, help="every 100 s, a game this far behind the leading game "
+                    "takes over its path (0: never)")
     ap.add_argument("--video", action="store_true", help="at the end, film each game's path in that game (<out>-<seed>.mp4)")
     ap.add_argument("--games", type=int, default=8)
     ap.add_argument("--game-dir", default=os.environ.get("GOI_GAME_DIR"), help="install folder (or set GOI_GAME_DIR)")

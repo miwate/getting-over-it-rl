@@ -19,7 +19,8 @@ PROGRESS = OBS_FIELDS.index("progress")
 
 def replay(game, z, j=0, video=None, every=1):
     """Replay path j of demos file z in `game`, writing every n-th frame to `video` (an .mp4 path; the game must render).
-    Returns (best progress, the step where it parted from the recorded trace or None, the largest gap)."""
+    Returns (best progress, the step where it parted from the recorded trace or None, the largest gap, the last
+    observation)."""
     trace = z["trace"] if "trace" in z else np.zeros(0)
     parted, worst, best = None, 0.0, -np.inf
     writer = imageio.get_writer(video, fps=30 / every if every > 1 else 30) if video else None
@@ -37,7 +38,7 @@ def replay(game, z, j=0, video=None, every=1):
     finally:
         if writer:
             writer.close()
-    return best, parted, worst
+    return best, parted, worst, obs
 
 
 def main():
@@ -55,7 +56,7 @@ def main():
     render = dict(render_mode="rgb_array", width=1280, height=720) if args.video else {}
     game = GoiEnv(args.game_dir, stall_steps=300, stall_ends=False, **render)
     try:
-        best, parted, worst = replay(game, z, args.demo, args.video, args.every)
+        best, parted, worst, _ = replay(game, z, args.demo, args.video, args.every)
     finally:
         game.close()
     print(f"best {best:.1f}" + ("" if "trace" not in z else f"; recorded best {z['trace'].max():.1f}, "
