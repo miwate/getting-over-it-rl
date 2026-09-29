@@ -132,6 +132,10 @@ class GoiEnv(gym.Env):
         change (the smoke test's "rendering on vs off"), so a path found without rendering replays the same with it."""
         self.client.configure(**{**self._config, "render": True, "width": width, "height": height})
         self.render_mode = "rgb_array"
+        for _ in range(100):  # the new window size takes a few frames (each frame() waits for one; no physics)
+            if self.client.frame()[:2] == (width, height):
+                return
+        raise RuntimeError(f"the game window didn't become {width}x{height}")
 
     def save_state(self):
         state_id = self.client.save_state()

@@ -1,11 +1,12 @@
 """A search agent that climbs the real game from the bottom (expert iteration's expert, playing): before each half second
 it tries futures with the game's own save/load (plan.decide: the prior policy's action plus held random offsets, a few
 pure random strokes; --robust scores the best of them under action noise) and commits the best. Without headway for
---stall seconds, it backtracks 2-10 s and searches harder (more futures, more random ones); gaining ground relaxes it
-again. Still without a new best after --explore-after seconds (the 2 s futures are too short-sighted to climb a pile),
-it runs a Go-Explore (explore.py) from where it is, and plays the path that gets --explore-gain past the best. The
-committed path is saved as a demo from the bottom (replayable: train.demo_steps; `trace` is the progress
-after each of its steps, to check a replay) and every committed step is a label for distill.py.
+--stall seconds, it backtracks 2-10 s and searches harder (more futures, more random ones); after a fall of --fall it
+goes back to where it reached its best; gaining ground relaxes it again. Still without a new best after
+--explore-after seconds (the 2 s futures are too short-sighted to climb a pile), it runs a Go-Explore (explore.py)
+from where it is, and plays the path that gets --explore-gain past the best. The path to the best (or the win) is saved
+as a demo from the bottom (replayable: train.demo_steps; `trace` is the progress after each of its steps, to check a
+replay) and every committed step is a label for distill.py.
 
     python scripts/climb.py runs/rw-port/checkpoints/ppo_1500160_steps.zip --then 224:runs/bar-sil/checkpoints/ppo_7_steps.zip --out runs/climbs/a
 """
@@ -36,12 +37,21 @@ def climb(seed, args):
     history = []  # (state id, path length, progress) per decision, the last `keep`
     keep = int(12 * 30 / args.commit)
     best, since, effort, won, gained = -np.inf, 0, 0, False, 0
+    peak = None  # (state id, path, trace, cuts) where the best was reached
 
-    def save():
-        np.savez(out, reached=np.array([len(path) - 1]), goal=best, climb0=np.zeros((0, 2), np.float32),
-                 try0=np.array(path, np.float32).reshape(-1, 2), cuts0=np.array(cuts), obs=np.array(X, np.float32),
+    def mark_best():  # a new best: remember where (the fall rule comes back here)
+        nonlocal best, peak
+        best = float(obs[PROGRESS])
+        if peak:
+            game.drop_state(peak[0])
+        peak = (game.save_state(), path[:], trace[:], cuts[:])
+
+    def save():  # the path to the win, else to the best so far
+        steps, progress, loads = (path, trace, cuts) if won or not peak else peak[1:]
+        np.savez(out, reached=np.array([len(steps) - 1]), goal=best, climb0=np.zeros((0, 2), np.float32),
+                 try0=np.array(steps, np.float32).reshape(-1, 2), cuts0=np.array(loads), obs=np.array(X, np.float32),
                  actions=np.array(A, np.float32), timeline=np.array(timeline, np.float32),
-                 trace=np.array(trace, np.float32))
+                 trace=np.array(progress, np.float32))
 
     try:
         obs, _ = game.reset()
@@ -71,17 +81,19 @@ def climb(seed, args):
                 won = True
                 break
             if p > best + 0.5:
-                best, since, effort, gained = p, 0, max(effort - 1, 0), decision
+                mark_best()
+                since, effort, gained = 0, max(effort - 1, 0), decision
             else:
                 since += 1
-            near = [i for i, h in enumerate(history) if h[2] >= best - args.fall / 2]
-            if (terminated or p < best - args.fall) and near:  # fell (or the lake, the Snake): back near the best
-                i = near[-1]
-            elif since * args.commit / 30 >= args.stall and len(history) > 4:  # stuck: back 2-10 s
+            if terminated or p < best - args.fall:  # fell (or the lake, the Snake): back to the best, search harder
+                for st, *_ in history:
+                    game.drop_state(st)
+                history = []
+                obs = game.load_state(peak[0])
+                path, trace, cuts = peak[1][:], peak[2][:], peak[3][:]
+                since, effort = 0, min(effort + 1, 3)
+            elif since * args.commit / 30 >= args.stall and len(history) > 4:  # stuck: back 2-10 s, search harder
                 i = len(history) - int(rng.integers(4, min(len(history), int(10 * 30 / args.commit)) + 1))
-            else:
-                i = None
-            if i is not None:  # and search harder
                 back, length, _ = history[i]
                 for st, *_ in history[i + 1:]:
                     game.drop_state(st)
@@ -108,7 +120,8 @@ def climb(seed, args):
                         obs, *_ = game.step(a)
                         trace.append(obs[PROGRESS])
                 if segments:
-                    best, since, effort = max(best, float(obs[PROGRESS])), 0, 0
+                    mark_best()
+                    since, effort = 0, 0
                     timeline.append(float(obs[PROGRESS]))
                 print(f"game {seed}: explored from {start:.1f}: " + (f"reached {obs[PROGRESS]:.1f}" if segments else
                       f"furthest {info['furthest']:.1f}"), flush=True)
@@ -134,7 +147,7 @@ def main():
     ap.add_argument("--out", required=True, help="path prefix: each game writes <out>-<seed>.npz")
     ap.add_argument("--minutes", type=float, default=30, help="game time each game may take (counting retries)")
     ap.add_argument("--stall", type=float, default=10, help="seconds without headway before backtracking")
-    ap.add_argument("--fall", type=float, default=5, help="progress lost below the best that backtracks at once")
+    ap.add_argument("--fall", type=float, default=5, help="progress lost below the best that goes back to the best")
     ap.add_argument("--explore-after", type=float, default=30, help="seconds without a new best before a Go-Explore")
     ap.add_argument("--explore-gain", type=float, default=3, help="progress past the best that ends a Go-Explore")
     ap.add_argument("--explore-steps", type=int, default=60_000, help="steps a Go-Explore may spend")
