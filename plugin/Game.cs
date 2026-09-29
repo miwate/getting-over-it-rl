@@ -48,6 +48,11 @@ class Game
     readonly ContactFilter2D solid;
     readonly Snapshot start;
     readonly Dictionary<int, Snapshot> saves = new Dictionary<int, Snapshot>(); // ~1 KB each, until dropped
+    // The snapshot the world was last rebuilt from, until the next step: a save then returns it. A capture of a rebuilt
+    // world isn't bit-identical to what it was rebuilt from (the hammer Tip's out-of-plane pose round-trips through its
+    // Transform, and its baked collider, inertia and centre of mass move in the last digits), so rebuilding twice
+    // differed from rebuilding once: a backtrack in a search, then a save and load, and the path no longer replayed.
+    Snapshot restored;
     readonly Collider2D[] overlap = new Collider2D[1];
     int nextSave;
     Camera[] cameras;
@@ -136,6 +141,7 @@ class Game
     // the hammer head, and the hammer goes loose.
     public void Step(Vector2 action)
     {
+        restored = null;
         VirtualMouse.Input = Vector2.ClampMagnitude(action, 100f);
         for (int i = 0; i < K; i++)
         {
@@ -247,7 +253,7 @@ class Game
     public int Save()
     {
         int id = nextSave++;
-        saves[id] = Capture();
+        saves[id] = restored ?? Capture();
         return id;
     }
 
@@ -431,6 +437,7 @@ class Game
         F.FadeOut.SetValue(cam, 0);
         F.FadeAlpha.SetValue(cam, 0f);
         if (Render) cam.Teleport(pot.position);
+        restored = s;
     }
 
     static float Wrap(float degrees) => degrees - 360f * Mathf.Round(degrees / 360f);
