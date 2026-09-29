@@ -8,6 +8,11 @@ progress x 2 of height; it keeps the state first reached there (or reached in fe
 its actions, and where the explorer loaded a saved state (a load rebuilds the physics world, so a replay loads at the
 same steps; train.demo_steps). Touching the Snake or the lake throws the segment away.
 
+With --policy, a trained policy plays the segments (its exploration noise scaled by --noise) instead of random strokes.
+Random-stroke paths proved impossible to learn from (imitating 42 garden demos: 1/320; PPO starting along them: 0/320),
+while self-imitation of a policy's own successes lifted the girder launch from 4% to 27%: a policy's paths are in its
+own style, so imitate.py can learn them.
+
     python scripts/explore.py --start 290 --goal 335 --out runs/demos/playground.npz
 """
 import argparse
@@ -39,6 +44,13 @@ def explore(seed, args):
     """One game's Go-Explore; returns its demos [(place, actions, cuts, reached)] and the furthest progress."""
     rng = np.random.default_rng(seed)
     place = (args.start + 0.5 * seed, args.dx)
+    player = None
+    if args.policy:
+        import torch
+        from train import Player
+        torch.set_num_threads(1)
+        torch.manual_seed(seed)
+        player = Player(args.policy, args.noise)
     game = GoiEnv(args.game_dir, snake_ends=True)
     archive = {}  # cell -> [state id, path (list of action arrays), steps, times chosen, progress]
     demos, furthest = [], 0.0
@@ -54,8 +66,11 @@ def explore(seed, args):
             state, path, steps, _, _ = archive[c]
             archive[c][3] += 1
             obs = game.load_state(state)
-            segment = strokes(rng, args.segment)
-            for t, a in enumerate(segment):
+            segment = strokes(rng, args.segment) if player is None else None
+            taken = []
+            for t in range(args.segment):
+                a = segment[t] if player is None else np.asarray(player(obs, t), np.float32)
+                taken.append(a)
                 obs, _, terminated, _, _ = game.step(a)
                 spent += 1
                 if terminated:  # the lake, the Snake (or the win: then the goal is past it anyway)
@@ -64,10 +79,10 @@ def explore(seed, args):
                 if k not in archive or steps + t + 1 < archive[k][2]:
                     if k in archive:
                         game.drop_state(archive[k][0])
-                    archive[k] = [game.save_state(), path + [segment[:t + 1]], steps + t + 1, 0, p]
+                    archive[k] = [game.save_state(), path + [np.array(taken)], steps + t + 1, 0, p]
                 furthest = max(furthest, p)
                 if p >= args.goal:
-                    new_path = path + [segment[:t + 1]]
+                    new_path = path + [np.array(taken)]
                     actions = np.concatenate(new_path)
                     cuts = np.cumsum([0] + [len(s) for s in new_path[:-1]])
                     demos.append((np.array(place, np.float32), actions, cuts, len(actions) - 1))
@@ -89,6 +104,8 @@ def main():
     ap.add_argument("--demos", type=int, default=3, help="demos each game stops after")
     ap.add_argument("--segment", type=int, default=120, help="steps of random strokes per return (4 s)")
     ap.add_argument("--focus", type=float, default=4.0, help="how strongly cells near the furthest are chosen")
+    ap.add_argument("--policy", help="a checkpoint that plays the segments instead of random strokes")
+    ap.add_argument("--noise", type=float, default=1.0, help="with --policy: its exploration noise scale")
     args = ap.parse_args()
     if not args.game_dir:
         ap.error("pass --game-dir or set GOI_GAME_DIR")
