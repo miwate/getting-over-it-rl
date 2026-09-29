@@ -77,8 +77,8 @@ class GoiEnv(gym.Env):
         self.action_cost = action_cost
         self.mouse = mouse
         self.weights = dict(recovery=recovery, regress=regress, air_bonus=air_bonus, speed_bonus=speed_bonus)
-        config = dict(k=k, n_rays=n_rays, ray_length=ray_length, render=render_mode is not None,
-                      width=width, height=height)
+        self._config = config = dict(k=k, n_rays=n_rays, ray_length=ray_length, render=render_mode is not None,
+                                     width=width, height=height)
         if game_dir:
             self._proc, self.client = start(game_dir, port, args=game_args, **config)
         else:
@@ -126,6 +126,12 @@ class GoiEnv(gym.Env):
             width, height, rgb = self.client.frame()
             return np.frombuffer(rgb, np.uint8).reshape(height, width, 3)
         # "human": the game window draws itself
+
+    def start_rendering(self, width=1280, height=720):
+        """Turn rendering on in a game launched without it: render() returns frames from then on. The physics doesn't
+        change (the smoke test's "rendering on vs off"), so a path found without rendering replays the same with it."""
+        self.client.configure(**{**self._config, "render": True, "width": width, "height": height})
+        self.render_mode = "rgb_array"
 
     def save_state(self):
         state_id = self.client.save_state()

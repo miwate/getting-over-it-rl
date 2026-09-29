@@ -16,6 +16,7 @@ import torch
 
 from goi_env import OBS_FIELDS, GoiEnv
 from plan import decide
+from replay import replay
 from train import chain, parse_then
 
 PROGRESS, WON = OBS_FIELDS.index("progress"), OBS_FIELDS.index("won")
@@ -90,6 +91,13 @@ def climb(seed, args):
                 save()
     finally:
         save()
+        if args.video:  # in this game: a fresh one can part from the path (replay.py)
+            try:
+                game.start_rendering()
+                _, parted, _ = replay(game, np.load(out), video=out[:-4] + ".mp4")
+                print(f"game {seed}: video {'matches its path' if parted is None else f'parted at {parted / 30:.1f} s'}")
+            except Exception as e:
+                print(f"game {seed}: no video ({e!r})")
         game.close()
     return seed, best, won, len(path) / 30, len(X)
 
@@ -110,6 +118,7 @@ def main():
     ap.add_argument("--robust", type=int, default=0, help="noisy plays that score each of the best futures (plan.py)")
     ap.add_argument("--robust-top", type=int, default=8)
     ap.add_argument("--sigma", type=float, default=0.05)
+    ap.add_argument("--video", action="store_true", help="at the end, film each game's path in that game (<out>-<seed>.mp4)")
     ap.add_argument("--games", type=int, default=8)
     ap.add_argument("--game-dir", default=os.environ.get("GOI_GAME_DIR"), help="install folder (or set GOI_GAME_DIR)")
     args = ap.parse_args()
