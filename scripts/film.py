@@ -73,7 +73,10 @@ def main():
 
     static = Image.new("RGB", (W, H), BG)
     d = ImageDraw.Draw(static)
-    d.text((40, 30), args.title, font=mid, fill=TEXT)
+    size = 34
+    while size > 16 and d.textlength(args.title, font=font("segoeuib.ttf", size)) > W - 80:  # fit the panel
+        size -= 1
+    d.text((40, 30), args.title, font=font("segoeuib.ttf", size), fill=TEXT)
     d.line((40, 90, W - 40, 90), fill=DIM, width=2)
     d.text((40, 110), "REWARD", font=mid, fill=DIM)
     d.text((40, 270), "+1 per unit of new route record, -0.001 per step", font=small, fill=DIM)
