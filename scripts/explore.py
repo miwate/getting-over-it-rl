@@ -13,7 +13,6 @@ same steps; train.demo_steps). Touching the Snake or the lake throws the segment
 import argparse
 import os
 from concurrent.futures import ProcessPoolExecutor
-from itertools import repeat
 
 import numpy as np
 
@@ -95,10 +94,16 @@ def main():
         ap.error("pass --game-dir or set GOI_GAME_DIR")
 
     with ProcessPoolExecutor(args.games) as ex:
-        results = list(ex.map(explore, range(args.games), repeat(args)))
+        futures = [ex.submit(explore, g, args) for g in range(args.games)]
+    results = []
+    for g, future in enumerate(futures):
+        try:  # one game that failed to start or crashed costs only its own demos
+            results.append(future.result())
+            part, furthest, cells = results[-1]
+            print(f"game {g}: {cells} cells, furthest {furthest:.1f}, demos {len(part)}")
+        except Exception as e:
+            print(f"game {g}: failed ({type(e).__name__}: {e})")
     demos = [d for part, _, _ in results for d in part]
-    for g, (part, furthest, cells) in enumerate(results):
-        print(f"game {g}: {cells} cells, furthest {furthest:.1f}, demos {len(part)}")
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     arrays = {}
     for j, (place, actions, cuts, reached) in enumerate(demos):

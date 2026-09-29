@@ -79,15 +79,15 @@ class GoiClient:
     """
 
     def __init__(self, port=5555, timeout=180.0, **config):
-        deadline = time.monotonic() + 60
-        while True:  # the bridge starts listening a few seconds after launch
+        deadline = time.monotonic() + 180
+        while True:  # the bridge starts listening a few seconds after launch (a minute or more on a loaded machine)
             try:
                 self.sock = socket.create_connection(("127.0.0.1", port), timeout=5)
                 break
             except OSError as e:
                 if time.monotonic() > deadline:
                     raise ConnectionError(
-                        f"no bridge on port {port} after 60 s. Is the game running with -goi-rl? With BepInEx's "
+                        f"no bridge on port {port} after 180 s. Is the game running with -goi-rl? With BepInEx's "
                         "default disk logging, at most 5 modded games can run from one install at a time.") from e
                 time.sleep(0.5)
         self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
