@@ -141,6 +141,15 @@ static class Patches
         return false;
     }
 
+    // The chapel's bat flock and the gift's are visual (the Bat prefab has no collider or body), but once they have
+    // flown, BatGen and OpenGift destroy their own objects, which have colliders (the gift a body too). A restore can't
+    // rebuild a destroyed physics object: the next load failed and the game quit. In RL mode they don't start.
+    [HarmonyPrefix, HarmonyPatch(typeof(BatGen), "OnTriggerEnter2D")]
+    static bool NoBats() => false;
+
+    [HarmonyPrefix, HarmonyPatch(typeof(OpenGift), "OnCollisionEnter2D")]
+    static bool NoGiftBats() => false;
+
     // Leaving the space zone through the top rolls the credits and deletes the save. In RL mode it only ends the episode.
     [HarmonyPrefix, HarmonyPatch(typeof(GravityControl), "OnTriggerExit2D")]
     static bool Win(GravityControl __instance, Collider2D coll)
