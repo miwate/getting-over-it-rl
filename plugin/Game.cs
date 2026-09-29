@@ -122,6 +122,11 @@ class Game
         pc.trackpad = false;  // the game applies the player's own mouse settings; RL games use the mouse defaults
         F.Sensitivity.SetValue(pc, 1f);
         pose.anim.enabled = false; // visual only: its own per-frame update would undo the pose script's hands-on-handle IK
+        // A restore deactivates and re-activates the Player (to re-create its bodies), which reset the character's
+        // animators: the opening pose's layer blended back in and the mesh deformed more with every load (videos of
+        // search paths, with a load every half second). Visual only: the pose never reaches the physics (Step).
+        pose.anim.keepAnimatorControllerStateOnDisable = true;
+        pose.potAnim.keepAnimatorControllerStateOnDisable = true;
         cam.enabled = false;       // visual only: a camera spring on Unity's clock trails a game that runs faster than real time
         player.GetComponent<Saviour>().enabled = false;  // autosave
         foreach (var j in InLevel<AnchoredJoint2D>()) j.autoConfigureConnectedAnchor = false; // re-created joints keep their anchors
@@ -436,7 +441,9 @@ class Game
         F.FadeIn.SetValue(cam, 0); // clear the lake's fade-to-red
         F.FadeOut.SetValue(cam, 0);
         F.FadeAlpha.SetValue(cam, 0f);
-        if (Render) cam.Teleport(pot.position);
+        // The camera jumps only with the climber (a reset, a placement, a backtrack): a load where it already is, like
+        // the rebuilds at a replay's cuts, would cut the video.
+        if (Render && Vector2.Distance(cam.transform.position, pot.position) > 5f) cam.Teleport(pot.position);
         restored = s;
     }
 
