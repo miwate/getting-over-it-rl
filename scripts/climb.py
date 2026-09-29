@@ -2,7 +2,9 @@
 it tries futures with the game's own save/load (plan.decide: the prior policy's action plus held random offsets, a few
 pure random strokes; --robust scores the best of them under action noise) and commits the best. Without headway for
 --stall seconds, it backtracks 2-10 s and searches harder (more futures, more random ones); gaining ground relaxes it
-again. The committed path is saved as a demo from the bottom (replayable: train.demo_steps; `trace` is the progress
+again. Still without a new best after --explore-after seconds (the 2 s futures are too short-sighted to climb a pile),
+it runs a Go-Explore (explore.py) from where it is, and plays the path that gets --explore-gain past the best. The
+committed path is saved as a demo from the bottom (replayable: train.demo_steps; `trace` is the progress
 after each of its steps, to check a replay) and every committed step is a label for distill.py.
 
     python scripts/climb.py runs/rw-port/checkpoints/ppo_1500160_steps.zip --then 224:runs/bar-sil/checkpoints/ppo_7_steps.zip --out runs/climbs/a
@@ -14,6 +16,7 @@ from concurrent.futures import ProcessPoolExecutor
 import numpy as np
 import torch
 
+from explore import go_explore
 from goi_env import OBS_FIELDS, GoiEnv
 from plan import decide
 from replay import replay
@@ -32,7 +35,7 @@ def climb(seed, args):
     path, trace, cuts, X, A, timeline = [], [], [], [], [], []
     history = []  # (state id, path length, progress) per decision, the last `keep`
     keep = int(12 * 30 / args.commit)
-    best, since, effort, won = -np.inf, 0, 0, False
+    best, since, effort, won, gained = -np.inf, 0, 0, False, 0
 
     def save():
         np.savez(out, reached=np.array([len(path) - 1]), goal=best, climb0=np.zeros((0, 2), np.float32),
@@ -68,7 +71,7 @@ def climb(seed, args):
                 won = True
                 break
             if p > best + 0.5:
-                best, since, effort = p, 0, max(effort - 1, 0)
+                best, since, effort, gained = p, 0, max(effort - 1, 0), decision
             else:
                 since += 1
             near = [i for i, h in enumerate(history) if h[2] >= best - args.fall / 2]
@@ -87,6 +90,28 @@ def climb(seed, args):
                 del path[length:], trace[length:]
                 cuts = [c for c in cuts if c < length]
                 since, effort = 0, min(effort + 1, 3)
+            if (decision - gained) * args.commit / 30 >= args.explore_after:  # long stuck: Go-Explore from here
+                gained, info, start = decision, {}, float(obs[PROGRESS])
+                root = game.save_state()
+                found = go_explore(game, rng, obs, best + args.explore_gain, args.explore_steps, info=info)
+                segments = next(found, None)
+                found.close()
+                obs = game.load_state(root)
+                game.drop_state(root)
+                for segment in segments or []:  # play the path it found as the climb's own (exact in this game)
+                    cuts.append(len(path))
+                    s = game.save_state()
+                    obs = game.load_state(s)
+                    game.drop_state(s)
+                    for a in segment:
+                        path.append(a)
+                        obs, *_ = game.step(a)
+                        trace.append(obs[PROGRESS])
+                if segments:
+                    best, since, effort = max(best, float(obs[PROGRESS])), 0, 0
+                    timeline.append(float(obs[PROGRESS]))
+                print(f"game {seed}: explored from {start:.1f}: " + (f"reached {obs[PROGRESS]:.1f}" if segments else
+                      f"furthest {info['furthest']:.1f}"), flush=True)
             if decision % 200 == 0:
                 save()
     finally:
@@ -110,6 +135,9 @@ def main():
     ap.add_argument("--minutes", type=float, default=30, help="game time each game may take (counting retries)")
     ap.add_argument("--stall", type=float, default=10, help="seconds without headway before backtracking")
     ap.add_argument("--fall", type=float, default=5, help="progress lost below the best that backtracks at once")
+    ap.add_argument("--explore-after", type=float, default=30, help="seconds without a new best before a Go-Explore")
+    ap.add_argument("--explore-gain", type=float, default=3, help="progress past the best that ends a Go-Explore")
+    ap.add_argument("--explore-steps", type=int, default=60_000, help="steps a Go-Explore may spend")
     ap.add_argument("--candidates", type=int, default=16)
     ap.add_argument("--random", type=int, default=2)
     ap.add_argument("--spread", type=float, default=1.5)

@@ -40,6 +40,46 @@ def strokes(rng, n):
     return np.array(out[:n], np.float32)
 
 
+def go_explore(game, rng, obs, goal, budget, segment=120, focus=4.0, player=None, info=None):
+    """Go-Explore from the game's current state (its observation `obs`) for up to `budget` steps. Yields each path
+    that reaches `goal`, as its segments (action arrays, each played after loading a saved state), with the game left
+    where the path ends. `info` (a dict) gets the furthest progress and the number of cells."""
+    info = {} if info is None else info
+    archive = {}  # cell -> [state id, path (list of action arrays), steps, times chosen, progress]
+    archive[cell(obs)] = [game.save_state(), [], 0, 0, float(obs[PROGRESS])]
+    info["furthest"], spent = float(obs[PROGRESS]), 0
+    try:
+        while spent < budget:
+            cells = list(archive)
+            prog = np.array([archive[c][4] for c in cells])
+            w = np.exp((prog - prog.max()) / focus) / np.sqrt(1 + np.array([archive[c][3] for c in cells]))
+            c = cells[rng.choice(len(cells), p=w / w.sum())]
+            state, path, steps, _, _ = archive[c]
+            archive[c][3] += 1
+            obs = game.load_state(state)
+            moves = strokes(rng, segment) if player is None else None
+            taken = []
+            for t in range(segment):
+                a = moves[t] if player is None else np.asarray(player(obs, t), np.float32)
+                taken.append(a)
+                obs, _, terminated, _, _ = game.step(a)
+                spent += 1
+                if terminated:  # the lake, the Snake (or the win: then the goal is past it anyway)
+                    break
+                p, k = float(obs[PROGRESS]), cell(obs)
+                if k not in archive or steps + t + 1 < archive[k][2]:
+                    if k in archive:
+                        game.drop_state(archive[k][0])
+                    archive[k] = [game.save_state(), path + [np.array(taken)], steps + t + 1, 0, p]
+                info["furthest"], info["cells"] = max(info["furthest"], p), len(archive)
+                if p >= goal:
+                    yield path + [np.array(taken)]
+                    break
+    finally:
+        for entry in archive.values():
+            game.drop_state(entry[0])
+
+
 def explore(seed, args):
     """One game's Go-Explore; returns its demos [(place, actions, cuts, reached)] and the furthest progress."""
     rng = np.random.default_rng(seed)
@@ -52,44 +92,18 @@ def explore(seed, args):
         torch.manual_seed(seed)
         player = Player(args.policy, args.noise)
     game = GoiEnv(args.game_dir, snake_ends=True)
-    archive = {}  # cell -> [state id, path (list of action arrays), steps, times chosen, progress]
-    demos, furthest = [], 0.0
+    demos, info = [], {"cells": 1}
     try:
         obs, _ = game.reset(options={"place": place[0], "dx": place[1]})
-        archive[cell(obs)] = [game.save_state(), [], 0, 0, float(obs[PROGRESS])]
-        furthest, spent = float(obs[PROGRESS]), 0
-        while spent < args.steps and len(demos) < args.demos:
-            cells = list(archive)
-            prog = np.array([archive[c][4] for c in cells])
-            w = np.exp((prog - prog.max()) / args.focus) / np.sqrt(1 + np.array([archive[c][3] for c in cells]))
-            c = cells[rng.choice(len(cells), p=w / w.sum())]
-            state, path, steps, _, _ = archive[c]
-            archive[c][3] += 1
-            obs = game.load_state(state)
-            segment = strokes(rng, args.segment) if player is None else None
-            taken = []
-            for t in range(args.segment):
-                a = segment[t] if player is None else np.asarray(player(obs, t), np.float32)
-                taken.append(a)
-                obs, _, terminated, _, _ = game.step(a)
-                spent += 1
-                if terminated:  # the lake, the Snake (or the win: then the goal is past it anyway)
-                    break
-                p, k = float(obs[PROGRESS]), cell(obs)
-                if k not in archive or steps + t + 1 < archive[k][2]:
-                    if k in archive:
-                        game.drop_state(archive[k][0])
-                    archive[k] = [game.save_state(), path + [np.array(taken)], steps + t + 1, 0, p]
-                furthest = max(furthest, p)
-                if p >= args.goal:
-                    new_path = path + [np.array(taken)]
-                    actions = np.concatenate(new_path)
-                    cuts = np.cumsum([0] + [len(s) for s in new_path[:-1]])
-                    demos.append((np.array(place, np.float32), actions, cuts, len(actions) - 1))
-                    break
+        for path in go_explore(game, rng, obs, args.goal, args.steps, args.segment, args.focus, player, info):
+            actions = np.concatenate(path)
+            cuts = np.cumsum([0] + [len(s) for s in path[:-1]])
+            demos.append((np.array(place, np.float32), actions, cuts, len(actions) - 1))
+            if len(demos) >= args.demos:
+                break
     finally:
         game.close()
-    return demos, furthest, len(archive)
+    return demos, info["furthest"], info["cells"]
 
 
 def main():
