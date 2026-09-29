@@ -7,6 +7,13 @@ offset of a random size (0 for one of them), and a few are pure random mouse str
 policy moves, so it can learn them (random-stroke paths, like explore.py's, proved unlearnable). The best future's first
 --commit steps are played for real, then it plans again. The committed steps (observation, action) are the labels.
 
+Robust moves (--robust, --sigma): the game is chaotic, and the best of many futures is mostly the luckiest one. Paths the
+explorer found through the garden all reached the goal replayed exactly, and none did with N(0, 0.01) added to each
+action: no network can repeat moves that precisely. So the --robust-top best futures are played --robust more times with
+N(0, --sigma) added to each action (the policy reacting to it), and a future scores the mean of its plays (the lake or
+the Snake in any of them rules it out). The committed steps are played with that noise too (DART, Laskey et al., 2017:
+the labels, without noise, then cover the states a slightly-off policy reaches, and show how to recover from them).
+
 DAgger (Ross et al., 2011): with --beta below 1, a decision plays the planner's move only with that chance, else the
 policy's own mean actions; then only the decision state is labeled (with the planner's first action). A policy
 trained on the planner's states alone drifts into states the planner never visited and can't recover there.
@@ -39,6 +46,27 @@ def future(game, state, policy, offsets, horizon):
     return float(obs[PROGRESS]), actions
 
 
+def decide(game, state, policy, rng, args):
+    """The best future from `state`: (its policy or None, its offsets, its actions); zeros if every future fails."""
+    tries = []
+    for k in range(args.candidates):
+        who = None if k < args.random else policy
+        size = 1.0 if who is None else 0.0 if k == args.random else rng.uniform(0, args.spread)
+        offsets = size * strokes(rng, args.horizon)
+        tries.append([*future(game, state, who, offsets, args.horizon), who, offsets])
+    tries.sort(key=lambda t: -t[0])
+    if args.robust:
+        tries = tries[:args.robust_top]
+        for t in tries:
+            plays = [future(game, state, t[2], t[3] + args.sigma * rng.standard_normal(t[3].shape), args.horizon)[0]
+                     for _ in range(args.robust)]
+            t[0] = float(np.mean([t[0], *plays]))
+        tries.sort(key=lambda t: -t[0])
+    if tries[0][0] == -np.inf:
+        return None, np.zeros((args.horizon, 2), np.float32), None
+    return tries[0][2], tries[0][3], tries[0][1]
+
+
 def plan_run(seed, args):
     """One game: plan from a placed start until the goal or the time budget. Returns the labels and the timeline."""
     torch.set_num_threads(1)
@@ -51,25 +79,18 @@ def plan_run(seed, args):
         obs, _ = game.reset(options={"place": args.place + 0.5 * seed, "dx": args.dx})
         for decision in range(int(args.seconds * 30 / args.commit)):
             state = game.save_state()
-            best, best_actions = -np.inf, None
-            for k in range(args.candidates):
-                if k < args.random:
-                    score, actions = future(game, state, None, strokes(rng, args.horizon), args.horizon)
-                else:
-                    size = 0.0 if k == args.random else rng.uniform(0, args.spread)
-                    score, actions = future(game, state, policy, size * strokes(rng, args.horizon), args.horizon)
-                if score > best:
-                    best, best_actions = score, actions
+            who, offsets, _ = decide(game, state, policy, rng, args)
             obs = game.load_state(state)
             game.drop_state(state)
-            best_actions = best_actions or [np.zeros(2, np.float32)]
             planner = rng.random() < args.beta
             for t in range(args.commit):
+                move = np.clip(offsets[t] if who is None else who(obs, t) + offsets[t], -1, 1).astype(np.float32)
                 if planner or t == 0:
                     X.append(obs)
-                    A.append(best_actions[min(t, len(best_actions) - 1)])
-                a = best_actions[min(t, len(best_actions) - 1)] if planner else np.asarray(policy(obs, t), np.float32)
-                obs, _, terminated, _, _ = game.step(a)
+                    A.append(move)
+                a = move if planner else np.asarray(policy(obs, t), np.float32)
+                noise = args.sigma * rng.standard_normal(2) if args.robust else 0.0
+                obs, _, terminated, _, _ = game.step(np.clip(a + noise, -1, 1).astype(np.float32))
                 if terminated:
                     break
             timeline.append(float(obs[PROGRESS]))
@@ -92,6 +113,9 @@ def main():
     ap.add_argument("--spread", type=float, default=1.5, help="largest held offset added to the policy's action")
     ap.add_argument("--horizon", type=int, default=60, help="steps each candidate plays (60: 2 s)")
     ap.add_argument("--commit", type=int, default=15, help="steps of the best candidate played before planning again")
+    ap.add_argument("--robust", type=int, default=0, help="noisy plays that score each of the best futures (0: off)")
+    ap.add_argument("--robust-top", type=int, default=8, help="how many of the best futures get the noisy plays")
+    ap.add_argument("--sigma", type=float, default=0.05, help="action noise of the noisy plays and the committed steps")
     ap.add_argument("--beta", type=float, default=1.0, help="chance a decision plays the planner's move (DAgger)")
     ap.add_argument("--games", type=int, default=8)
     ap.add_argument("--out", help=".npz of the labels (observations, actions) and each game's progress timeline")
