@@ -55,6 +55,9 @@ class Game
     PhysicsScene2D world;
     int generation;
     float simTime;
+    float progress;  // route progress at the last observation (Progress)
+    const float MaxAdvance = 3f; // route units per observation that always count (the pot moves ~1 per step at most)
+    const float OnRoute = 3f;    // a pot this close to the route point is there, however far ahead it is
     bool ready;
 
     // Runs when the level has loaded but before any Start(), so the bodies are still in the authored start pose.
@@ -99,6 +102,7 @@ class Game
         start = Capture();
         start.mw = tip.position; // what the scripts' Start() would set
         start.hammerSlide = start.potSlide = true;
+        start.progress = route.TFToDistance(route.GetNearestPointTF(player.transform.position));
         for (int i = 0; i < teleporters.Length; i++) start.teleport[3 * i + 2] = true; // enableTeleport
     }
 
@@ -175,6 +179,32 @@ class Game
         t.shouldEnable = true;
     }
 
+    // Route progress as ProgressMeter measures it (the distance along LevelSpline to its point nearest the pot), except
+    // that it can't leap ahead. Where the route doubles back, the nearest point jumps: under the box pile past the
+    // playground it read 325 for a pot near 290, and exploration and rewards chased such jumps in most sections. A
+    // forward leap counts only as far as the distance to the route keeps shrinking along it from the last value (a real
+    // advance does; a flip to another part of the route behind a barrier doesn't), unless the pot is right at the new
+    // point (hanging under the girder's end is genuine; under the boxes the pot was ~10 from its "325"). Falling back
+    // counts at once.
+    float Progress(Vector3 position)
+    {
+        float Gap(float s) => Vector2.Distance(route.Interpolate(route.DistanceToTF(s)), position);
+        float nearest = route.TFToDistance(route.GetNearestPointTF(position));
+        if (nearest <= progress + MaxAdvance || Gap(nearest) <= OnRoute) return progress = nearest;
+        float best = progress, bestGap = Gap(progress);
+        for (float s = progress + 0.5f; s <= nearest; s += 0.5f)
+        {
+            float gap = Gap(s);
+            if (gap > bestGap + 0.05f) break; // moving on along the route takes us away from the pot again
+            if (gap <= bestGap)
+            {
+                best = s;
+                bestGap = gap;
+            }
+        }
+        return progress = best;
+    }
+
     // The observation, then one status value that isn't part of it: 1 while the pot touches the Snake.
     public int Observe(float[] o)
     {
@@ -188,7 +218,7 @@ class Game
         o[12] = pot.IsTouching(solid) ? 1 : 0;
         o[13] = lake.resetting ? 1 : 0;
         o[14] = Patches.Won ? 1 : 0;
-        float along = route.TFToDistance(route.GetNearestPointTF(player.transform.position)); // ProgressMeter.progress, current
+        float along = Progress(player.transform.position);
         o[15] = along;
         Vector2 c = cursor.position, head = tip.position; // the cursor is where the controller aims next
         o[16] = c.x - p.x; o[17] = c.y - p.y;
@@ -235,6 +265,7 @@ class Game
         float turn = angle - Vector2.SignedAngle(Vector2.right, s.pos[Index(tip)] - s.pos[Index(hub)]);
         var spin = Quaternion.Euler(0, 0, turn);
         s.hingeAngle = (float[])s.hingeAngle.Clone();
+        s.progress = along;
         s.hingeAngle[Array.IndexOf(hinges, pc.hj)] += turn; // the hammer's hinge turns with it
         for (int i = 0; i < bodies.Length; i++)
         {
@@ -305,6 +336,7 @@ class Game
         s.lakeReset = lake.resetting;
         s.teleport = teleporters.SelectMany(t => new[] { t.shouldTeleport, t.shouldEnable, t.enableTeleport }).ToArray();
         s.hingeAngle = hinges.Select(h => h.jointAngle).ToArray();
+        s.progress = progress;
         return s;
     }
 
@@ -369,6 +401,7 @@ class Game
         if (!world.Simulate(0f)) throw new InvalidOperationException("PhysicsScene2D.Simulate(0) did not run");
         Physics2D.gravity = s.gravity;
         simTime = s.simTime;
+        progress = s.progress;
         Patches.Won = s.won;
         F.Mw.SetValue(pc, s.mw);
         F.MouseInput.SetValue(pc, s.mouseInput);
@@ -438,6 +471,7 @@ class Game
         public bool won, mouseSnap, hammerSlide, potSlide, creditsUp, giftSpawned, giftOpened, lakeReset;
         public bool[] teleport; // per teleporter: shouldTeleport, shouldEnable, enableTeleport
         public float[] hingeAngle; // per hinge: its joint angle
+        public float progress;     // route progress at capture (continuity of Progress)
         public Collider2D[] hammerKeys, potKeys;
 
         public Snapshot Copy()
