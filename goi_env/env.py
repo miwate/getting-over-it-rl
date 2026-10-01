@@ -57,7 +57,7 @@ class GoiEnv(gym.Env):
 
     def __init__(self, game_dir=None, port=None, k=4, n_rays=32, ray_length=15.0, time_penalty=0.001, stall_steps=None,
                  stall_ends=True, snake_ends=False, action_cost=0.0, mouse=MOUSE, recovery=0.0, regress=0.0, air_bonus=0.0, speed_bonus=0.0,
-                 render_mode=None, realtime=True, width=640, height=360, game_args=()):
+                 render_mode=None, realtime=True, width=640, height=360, game_args=(), head_rays=0, head_length=4.0):
         """Launches the game from game_dir on a free port, or with game_dir=None connects to one already running on
         `port` (default 5555).
 
@@ -78,7 +78,7 @@ class GoiEnv(gym.Env):
         self.mouse = mouse
         self.weights = dict(recovery=recovery, regress=regress, air_bonus=air_bonus, speed_bonus=speed_bonus)
         self._config = config = dict(k=k, n_rays=n_rays, ray_length=ray_length, render=render_mode is not None,
-                                     width=width, height=height)
+                                     width=width, height=height, head_rays=head_rays, head_length=head_length)
         if game_dir:
             self._proc, self.client = start(game_dir, port, args=game_args, **config)
         else:

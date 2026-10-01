@@ -57,13 +57,15 @@ class Server
                 switch ((char)input[0])
                 {
                     case 'k':
-                        Read(24);
+                        Read(32);
                         game.K = Mathf.Clamp(Int(0), 1, 10000);
                         game.RayCount = Mathf.Clamp(Int(4), 0, obs.Length - Game.ObsFields - 1);
                         game.RayLength = Mathf.Max(Float(8), 0.01f);
                         game.SetRender(Int(12) != 0);
                         if (Int(16) > 0 && Int(20) > 0) Screen.SetResolution(Int(16), Int(20), FullScreenMode.Windowed);
-                        SendInt(Game.ObsFields + game.RayCount);
+                        game.HeadRayCount = Mathf.Clamp(Int(24), 0, obs.Length - Game.ObsFields - game.RayCount - 1);
+                        game.HeadRayLength = Mathf.Max(Float(28), 0.01f);
+                        SendInt(Game.ObsFields + game.RayCount + game.HeadRayCount);
                         break;
                     case 'r':
                         game.Reset();

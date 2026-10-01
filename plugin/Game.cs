@@ -20,6 +20,8 @@ class Game
     public int K = 4;                // physics steps per action
     public int RayCount = 16;
     public float RayLength = 10f;
+    public int HeadRayCount;            // rays from the hammer head, after the pot's: what it can hook (0: none)
+    public float HeadRayLength = 4f;
     public bool Render { get; private set; } = true;
 
     readonly float dt = Time.fixedDeltaTime;
@@ -249,8 +251,14 @@ class Game
             var hit = world.Raycast(p, new Vector2(Mathf.Cos(a), Mathf.Sin(a)), RayLength, solid);
             o[ObsFields + i] = hit ? hit.distance : RayLength;
         }
-        o[ObsFields + RayCount] = pot.IsTouching(snake) ? 1 : 0;
-        return ObsFields + RayCount + 1;
+        for (int i = 0; i < HeadRayCount; i++)
+        {
+            float a = 2 * Mathf.PI * i / HeadRayCount;
+            var hit = world.Raycast(tip.position, new Vector2(Mathf.Cos(a), Mathf.Sin(a)), HeadRayLength, solid);
+            o[ObsFields + RayCount + i] = hit ? hit.distance : HeadRayLength;
+        }
+        o[ObsFields + RayCount + HeadRayCount] = pot.IsTouching(snake) ? 1 : 0;
+        return ObsFields + RayCount + HeadRayCount + 1;
     }
 
     public void Reset() => Restore(start);

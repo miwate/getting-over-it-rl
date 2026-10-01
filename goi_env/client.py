@@ -95,9 +95,11 @@ class GoiClient:
         self.configure(**config)
         self.sock.settimeout(30)
 
-    def configure(self, k=4, n_rays=16, ray_length=10.0, render=False, width=0, height=0):
-        """k physics steps (1/120 s each) per action; width/height 0 keeps the window size."""
-        self.obs_size = self._int(b"k" + struct.pack("<iifiii", k, n_rays, ray_length, int(render), width, height))
+    def configure(self, k=4, n_rays=16, ray_length=10.0, render=False, width=0, height=0, head_rays=0, head_length=4.0):
+        """k physics steps (1/120 s each) per action; width/height 0 keeps the window size; head_rays: distances to
+        the terrain from the hammer head, after the pot's rays."""
+        self.obs_size = self._int(b"k" + struct.pack("<iifiiiif", k, n_rays, ray_length, int(render), width, height,
+                                                      head_rays, head_length))
         self._obs = struct.Struct(f"<{self.obs_size + 1}f")  # then a status: 1 while the pot touches the Snake
         self.on_snake = False
         return self.obs_size

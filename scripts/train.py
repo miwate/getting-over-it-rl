@@ -16,7 +16,7 @@ from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback
 from stable_baselines3.common.vec_env import SubprocVecEnv, VecMonitor, VecNormalize
 
 from goi_env import OBS_FIELDS, GoiEnv
-from goi_env.env import MOUSE
+from goi_env.env import MOUSE, PREV_ACTIONS
 from policy import BigPolicy, BoundedMeanPolicy, GrownPolicy
 
 PROGRESS, HEAD, POT = (OBS_FIELDS.index(f) for f in ("progress", "head_contact", "pot_contact"))
@@ -286,7 +286,35 @@ def parse_then(specs):
     return [(float(s.split(":", 1)[0]), s.split(":", 1)[1]) for s in specs]
 
 
-def warm_start(model, checkpoint):
+def widen(x, extra, axis):
+    """Insert `extra` inputs (zeros) before GoiEnv's own last fields (past actions, stuck, gap): the bridge's new
+    observation fields (head rays) come after its others."""
+    at = x.shape[axis] - (2 * PREV_ACTIONS + 2)
+    cut = [slice(None)] * x.ndim
+    lib = torch if isinstance(x, torch.Tensor) else np
+    shape = list(x.shape)
+    shape[axis] = extra
+    pad = lib.zeros(shape, dtype=x.dtype)
+    cut[axis] = slice(None, at)
+    head = x[tuple(cut)]
+    cut[axis] = slice(at, None)
+    return lib.cat([head, pad, x[tuple(cut)]], axis) if lib is torch else np.concatenate([head, pad, x[tuple(cut)]], axis)
+
+
+def load_norm(checkpoint, venv):
+    """A checkpoint's observation normalization for `venv`, widened (mean 0, var 1) if venv has new inputs."""
+    with open(vecnormalize_path(checkpoint), "rb") as f:
+        norm = pickle.load(f)
+    extra = venv.observation_space.shape[0] - norm.observation_space.shape[0]
+    if extra:
+        rms = norm.obs_rms
+        rms.mean, rms.var = widen(rms.mean, extra, 0), widen(rms.var - 1, extra, 0) + 1
+        norm.observation_space = venv.observation_space
+    norm.set_venv(venv)
+    return norm
+
+
+def warm_start(model, checkpoint, extra=0):
     """Copy a checkpoint's weights into a new model, where they fit: a bounded mean nests the mean layer as action_net.0,
     and gSDE's noise matrix doesn't match a plain Gaussian's log_std (it starts fresh)."""
     new = model.policy.state_dict()
@@ -297,6 +325,8 @@ def warm_start(model, checkpoint):
             k = "action_net." + ("0." if nested else "") + k.split(".")[-1]
         if k in new and new[k].shape == v.shape:
             loaded[k] = v
+        elif k in new and new[k].shape[1:] == (v.shape[1] + extra,) and new[k].shape[0] == v.shape[0] and extra:
+            loaded[k] = widen(v, extra, 1)  # a first layer: zero weights on the new inputs keep its behavior
     model.policy.load_state_dict({**new, **loaded})
     print(f"warm start from {checkpoint}: {len(loaded)} of {len(new)} tensors; fresh: {sorted(set(new) - set(loaded))}")
 
@@ -382,6 +412,9 @@ def main():
     ap.add_argument("--device", default="cpu", help="where the network trains: cpu (fastest for the small net) or cuda")
     ap.add_argument("--ent-coef", type=float, default=0.0, help="entropy bonus")
     ap.add_argument("--action-cost", type=float, default=0.0, help="reward cost per step of the mean squared action")
+    ap.add_argument("--head-rays", type=int, default=0,
+                    help="observe this many distances to the terrain from the hammer head too (0: off; a warm start "
+                         "from a checkpoint without them gets zero weights on them)")
     ap.add_argument("--mouse", type=float, default=MOUSE, help="mouse input at action 1 (evaluate with the same)")
     # Reward weights (goi_env.env.progress_reward); all 0: new progress records only.
     ap.add_argument("--recovery", type=float, default=0.0, help="reward per unit climbed back below the episode's record")
@@ -400,7 +433,7 @@ def main():
     run_dir = os.path.join("runs", args.name)
     checkpoints = os.path.join(run_dir, "checkpoints")
     stall_steps = int(args.stall_seconds * 120 / args.k) or None
-    env_kwargs = dict(action_cost=args.action_cost, mouse=args.mouse, recovery=args.recovery, regress=args.regress,
+    env_kwargs = dict(head_rays=args.head_rays, action_cost=args.action_cost, mouse=args.mouse, recovery=args.recovery, regress=args.regress,
                       air_bonus=args.air_bonus, speed_bonus=args.speed_bonus)
     envs = [partial(make_env, args.game_dir, args.k, args.episode_steps, stall_steps, args.saved_starts,
                     args.rewinds, args.traps, args.refresh, args.frontier, args.window, args.place,
@@ -413,7 +446,7 @@ def main():
             model = PPO.load(args.resume, env=venv, device=args.device, tensorboard_log=run_dir)
         else:
             if args.warm_start:
-                venv = VecNormalize.load(vecnormalize_path(args.warm_start), venv)
+                venv = load_norm(args.warm_start, venv)
                 venv.gamma = args.gamma
             else:
                 venv = VecNormalize(venv, gamma=args.gamma)
@@ -438,7 +471,7 @@ def main():
                         target_kl=args.target_kl, ent_coef=args.ent_coef, **exploration, policy_kwargs=policy_kwargs,
                         device=args.device, tensorboard_log=run_dir, verbose=1)
             if args.warm_start:
-                warm_start(model, args.warm_start)
+                warm_start(model, args.warm_start, args.head_rays)
                 if args.fresh_noise:
                     with torch.no_grad():
                         model.policy.log_std.fill_(policy_kwargs.get("log_std_init", 0.0))
