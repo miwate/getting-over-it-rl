@@ -55,14 +55,18 @@ class Starts(gym.Wrapper):
     the last `demo_back` steps before each success (300: 10 s); a share of episodes start from one, so the agent
     practices from where it nearly succeeds. With `demo_window` (lo, hi), the states kept are instead those along that
     stretch of route progress, every third of a second (a climb.py path from the bottom: a section of the route).
+    With `demo_curriculum` too (the backward algorithm, Salimans & Chen 2018): demo starts come only from the path's
+    last `back_k` states before the stretch's end, 10 (3 s) at first, 5 more each time 30% of the last 20 demo-started
+    episodes reached the end. Uniform starts over a whole section gave no reward signal in most sections.
 
     Infos carry from_bottom and rewinds (1 or 0). Bottom starts without rewinds play the real game.
     """
 
     def __init__(self, env, saved_share=0.5, rewind_share=0.5, bin_size=2.0, fall=5.0, every=30, max_retries=3,
-                 trap_share=0.0, trap_after=150, pool=30, refresh=0.0, frontier=0.0, window=None, place=None, place_at=(), demos=None, demo_share=0.0, demo_back=300, demo_window=None):
+                 trap_share=0.0, trap_after=150, pool=30, refresh=0.0, frontier=0.0, window=None, place=None, place_at=(), demos=None, demo_share=0.0, demo_back=300, demo_window=None, demo_curriculum=False):
         super().__init__(env)
         self.demo_window = demo_window
+        self.curriculum, self.back_k, self.outcomes, self.start = demo_curriculum, 10, [], None
         self.demo_path, self.demo_share, self.demo_back, self.demos = demos, demo_share, demo_back, []  # demo state ids
         self.refresh, self.frontier, self.window, self.bin = refresh, frontier, window, None
         self.place = [(a, 0.0) for a in np.arange(*place, bin_size)] if place else []
@@ -86,6 +90,13 @@ class Starts(gym.Wrapper):
         if self.demo_path:
             self._seed_demos(self.demo_path, self.demo_back)
             self.demo_path = None
+        if self.curriculum and self.start == "demo":  # how the last episode from the path went
+            self.outcomes.append(game.best_progress >= self.demo_window[1])
+            if len(self.outcomes) >= 20:
+                if np.mean(self.outcomes) >= 0.3 and self.back_k < len(self.demos):
+                    self.back_k = min(self.back_k + 5, len(self.demos))
+                    print(f"curriculum: starts from the last {self.back_k} of {len(self.demos)} path states", flush=True)
+                self.outcomes = []
         options = dict(options or {})
         for state, _ in self.recent:
             game.drop_state(state)
@@ -105,7 +116,8 @@ class Starts(gym.Wrapper):
                 options["state"] = self.traps[self.rng.integers(len(self.traps))]
                 self.start = "trap"
             elif self.demos and r < self.trap_share + self.demo_share:
-                options["state"] = self.demos[self.rng.integers(len(self.demos))]
+                pool = self.demos[-self.back_k:] if self.curriculum else self.demos
+                options["state"] = pool[self.rng.integers(len(pool))]
                 self.start = "demo"
             elif bins and r < self.trap_share + self.demo_share + self.saved_share:
                 weights = np.array([1 / np.sqrt(1 + self.bins[b][1]) for b in bins])
@@ -215,12 +227,13 @@ def demo_steps(game, z, j):
 
 def make_env(game_dir, k, episode_steps, stall_steps, saved_starts, rewinds, traps=0.0, refresh=0.0, frontier=0.0,
              window=None, place=None, place_at=(), demos=None, demo_share=0.0, demo_back=300, demo_window=None,
-             **env_kwargs):
+             demo_curriculum=False, **env_kwargs):
     """env_kwargs: GoiEnv's action_cost, mouse and reward weights."""
     env = Starts(GoiEnv(game_dir, k=k, stall_steps=stall_steps, snake_ends=True, **env_kwargs), saved_starts, rewinds,
                  trap_share=traps,
                  trap_after=(stall_steps or 300) // 2, refresh=refresh, frontier=frontier, window=window, place=place,
-                 place_at=place_at, demos=demos, demo_share=demo_share, demo_back=demo_back, demo_window=demo_window)
+                 place_at=place_at, demos=demos, demo_share=demo_share, demo_back=demo_back, demo_window=demo_window,
+                 demo_curriculum=demo_curriculum)
     return TimeLimit(env, episode_steps)
 
 
@@ -340,6 +353,8 @@ def main():
     ap.add_argument("--demo-back", type=float, default=10, help="with --demos: seconds before each success to start from")
     ap.add_argument("--demo-window", type=float, nargs=2, metavar=("LO", "HI"),
                     help="with --demos: start from the demos' states along this stretch of route progress instead")
+    ap.add_argument("--demo-curriculum", action="store_true",
+                    help="with --demo-window: start near the stretch's end first, moving back as episodes succeed")
     ap.add_argument("--place-at", nargs="+", default=[], metavar="ALONG:DX",
                     help="also seed placed starts at these route distances, moved sideways by DX (e.g. 226:1.2)")
     # Defaults: abl-oldhp's settings, the best of the 2M-step experiments (docs/RECON.md, "Settings experiments").
@@ -385,7 +400,7 @@ def main():
     envs = [partial(make_env, args.game_dir, args.k, args.episode_steps, stall_steps, args.saved_starts,
                     args.rewinds, args.traps, args.refresh, args.frontier, args.window, args.place,
                     [tuple(map(float, spot.split(":"))) for spot in args.place_at], args.demos, args.demo_share,
-                    int(args.demo_back * 120 / args.k), args.demo_window, **env_kwargs)] * args.envs
+                    int(args.demo_back * 120 / args.k), args.demo_window, args.demo_curriculum, **env_kwargs)] * args.envs
     venv = VecMonitor(SubprocVecEnv(envs), info_keywords=("best_progress", "from_bottom", "rewinds"))
     try:
         if args.resume:

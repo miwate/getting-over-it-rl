@@ -24,23 +24,23 @@ SECTIONS = [(9, "lakeside"), (60, "rocks"), (120, "tree and slope"), (176, "chim
             (660, "Ice Mountain"), (735, "radio mast"), (760, "space"), (864, "win")]
 
 
-def run(sections, args):
-    """One game: replay the path, keep the entry state of each of `sections` (indices), then the tries from each.
-    Returns {section: [(best progress, final progress, won), ...]}."""
+def run(units, args):
+    """One game: replay the path, keep the state where it first reaches each unit's start (units: (index, start,
+    goal), by start), then the tries from each. Returns {index: [(best progress, final progress, won), ...]}."""
     torch.set_num_threads(1)
     player = chain(args.checkpoint, parse_then(args.then), args.noise)
     game = GoiEnv(args.game_dir, stall_steps=int(STALL_SECONDS * 30), stall_ends=False)
     z = np.load(args.path)
-    starts, todo = {}, sorted(sections)
+    starts, todo, goals = {}, sorted(units, key=lambda u: u[1]), {i: g for i, _, g in units}
     try:
         for t, obs, a in demo_steps(game, z, 0):
-            while todo and obs[PROGRESS] >= SECTIONS[todo[0]][0]:
-                starts[todo.pop(0)] = game.save_state()
+            while todo and obs[PROGRESS] >= todo[0][1]:
+                starts[todo.pop(0)[0]] = game.save_state()
             if not todo or a is None:
                 break
         out = {}
         for i, state in starts.items():
-            goal = SECTIONS[i + 1][0]
+            goal = goals[i]
             out[i] = []
             for k in range(args.tries):
                 torch.manual_seed(1000 * i + k)
@@ -67,29 +67,35 @@ def main():
     ap.add_argument("--tries", type=int, default=16)
     ap.add_argument("--seconds", type=float, default=90, help="game time per try")
     ap.add_argument("--games", type=int, default=8)
+    ap.add_argument("--split", type=int, default=1, help="also start from this many points along each section")
     ap.add_argument("--game-dir", default=os.environ.get("GOI_GAME_DIR"), help="install folder (or set GOI_GAME_DIR)")
     args = ap.parse_args()
     if not args.game_dir:
         ap.error("pass --game-dir or set GOI_GAME_DIR")
 
-    n = len(SECTIONS) - 1
-    chunks = [list(range(g, n, args.games)) for g in range(args.games)]
+    units = []  # (index, start, goal, name)
+    for i in range(len(SECTIONS) - 1):
+        (lo, name), hi = SECTIONS[i], SECTIONS[i + 1][0]
+        for k in range(args.split):
+            units.append((len(units), lo + (hi - lo) * k / args.split, hi, name if k == 0 else ""))
+    n = len(units)
+    chunks = [[u[:3] for u in units[g::args.games]] for g in range(args.games)]
     results = {}
     with ProcessPoolExecutor(args.games) as ex:
         for part in ex.map(run, chunks, repeat(args)):
             results.update(part)
-    print(f"{args.tries} tries of {args.seconds:.0f} s from where the path enters each section; noise {args.noise}")
+    print(f"{args.tries} tries of {args.seconds:.0f} s from where the path reaches each start; noise {args.noise}")
     print(f"{'section':<20}{'from':>6}{'to':>6}{'crossed':>10}{'mean gain':>11}{'fell':>7}")
     for i in range(n):
+        _, start, goal, name = units[i]
         if i not in results:
-            print(f"{SECTIONS[i][1]:<20}{SECTIONS[i][0]:>6}  (not reached)")
+            print(f"{name:<20}{start:>6.0f}  (not reached)")
             continue
-        start, goal = SECTIONS[i][0], SECTIONS[i + 1][0]
         tries = results[i]
         crossed = sum(b >= goal or w for b, _, w in tries)
         gain = np.mean([b - start for b, _, _ in tries])
         fell = sum(f < start - 5 for _, f, _ in tries)
-        print(f"{SECTIONS[i][1]:<20}{start:>6}{goal:>6}{crossed:>5}/{len(tries):<4}{gain:>11.1f}{fell:>4}/{len(tries)}")
+        print(f"{name:<20}{start:>6.0f}{goal:>6}{crossed:>5}/{len(tries):<4}{gain:>11.1f}{fell:>4}/{len(tries)}")
 
 
 if __name__ == "__main__":
