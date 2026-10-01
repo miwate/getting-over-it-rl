@@ -56,8 +56,10 @@ class Starts(gym.Wrapper):
     practices from where it nearly succeeds. With `demo_window` (lo, hi), the states kept are instead those along that
     stretch of route progress, every third of a second (a climb.py path from the bottom: a section of the route).
     With `demo_curriculum` too (the backward algorithm, Salimans & Chen 2018): demo starts come only from the path's
-    last `back_k` states before the stretch's end, 10 (3 s) at first, 5 more each time 30% of the last 20 demo-started
-    episodes reached the end. Uniform starts over a whole section gave no reward signal in most sections.
+    last `back_k` states before the stretch's end, 10 (3 s) at first: half from its frontier (its earliest 5 states),
+    half from anywhere in it; 5 more each time 30% of the last 20 frontier-started episodes reached the end. Uniform
+    starts over a whole section gave no reward signal in most sections; judging all starts moved the frontier back
+    before the hard states were learned (chapel: 40 states back in training, 0/10 from 8 s before the end).
 
     Infos carry from_bottom and rewinds (1 or 0). Bottom starts without rewinds play the real game.
     """
@@ -90,7 +92,7 @@ class Starts(gym.Wrapper):
         if self.demo_path:
             self._seed_demos(self.demo_path, self.demo_back)
             self.demo_path = None
-        if self.curriculum and self.start == "demo":  # how the last episode from the path went
+        if self.curriculum and self.start == "frontier":  # how the last episode from the frontier went
             self.outcomes.append(game.best_progress >= self.demo_window[1])
             if len(self.outcomes) >= 20:
                 if np.mean(self.outcomes) >= 0.3 and self.back_k < len(self.demos):
@@ -117,8 +119,11 @@ class Starts(gym.Wrapper):
                 self.start = "trap"
             elif self.demos and r < self.trap_share + self.demo_share:
                 pool = self.demos[-self.back_k:] if self.curriculum else self.demos
+                frontier = self.curriculum and self.rng.random() < 0.5
+                if frontier:
+                    pool = pool[:5]
                 options["state"] = pool[self.rng.integers(len(pool))]
-                self.start = "demo"
+                self.start = "frontier" if frontier else "demo"
             elif bins and r < self.trap_share + self.demo_share + self.saved_share:
                 weights = np.array([1 / np.sqrt(1 + self.bins[b][1]) for b in bins])
                 if self.frontier:
