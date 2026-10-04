@@ -277,13 +277,20 @@ class Player:
 def chain(base, then=(), noise=0.5):
     """A player made of checkpoints that take over by route progress: base, then each (from, checkpoint) from that
     progress on. A specialist for a stretch hands back to the earlier player below it, e.g. after a fall."""
-    players = [(-np.inf, Player(base, noise))] + sorted(((f, Player(c, noise)) for f, c in then), key=lambda t: t[0])
+    players = [(-np.inf, Player(base, noise))] + sorted(((t[0], Player(t[1], t[2] if len(t) > 2 else noise))
+                                                         for t in then), key=lambda t: t[0])
     return lambda obs, step: [p for f, p in players if obs[PROGRESS] >= f][-1](obs, step)
 
 
 def parse_then(specs):
-    """--then FROM:CHECKPOINT arguments as (from, checkpoint) pairs."""
-    return [(float(s.split(":", 1)[0]), s.split(":", 1)[1]) for s in specs]
+    """--then FROM:CHECKPOINT[@NOISE] arguments as (from, checkpoint[, noise]): a specialist trained with the path
+    curriculum plays best at its full noise (@1), older ones at 0.5."""
+    out = []
+    for s in specs:
+        start, rest = s.split(":", 1)
+        path, _, noise = rest.partition("@")
+        out.append((float(start), path) + ((float(noise),) if noise else ()))
+    return out
 
 
 def widen(x, extra, axis):
