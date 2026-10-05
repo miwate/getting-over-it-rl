@@ -11,7 +11,7 @@ import gymnasium as gym
 import numpy as np
 import torch
 from gymnasium.wrappers import TimeLimit
-from stable_baselines3 import PPO
+from stable_baselines3 import PPO, SAC
 from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback
 from stable_baselines3.common.vec_env import SubprocVecEnv, VecMonitor, VecNormalize
 
@@ -253,6 +253,10 @@ def act(model, obs, step, noise=1.0):
     """The action at an episode's `step` for one game's normalized observation: the mean action plus `noise` times the
     exploration noise (1: as in training, 0: the mean alone), clipped to [-1, 1]. rw-control plays best at 0.5: the
     noise it trained with blurs the moves it knows, and the mean alone freezes at the chimney top (docs/RECON.md)."""
+    if isinstance(model, SAC):  # rlpd.py: tanh of the actor's Gaussian, its noise scaled the same way
+        with torch.no_grad():
+            mu, log_std, _ = model.actor.get_action_dist_params(model.policy.obs_to_tensor(obs)[0])
+            return torch.tanh(mu + noise * log_std.exp() * torch.randn_like(mu)).cpu().numpy()
     explore(model, step)
     with torch.no_grad():
         dist = model.policy.get_distribution(model.policy.obs_to_tensor(obs)[0])
@@ -265,7 +269,7 @@ class Player:
     observation in, one action out."""
 
     def __init__(self, checkpoint, noise=0.5):
-        self.model = PPO.load(checkpoint, device="cpu")
+        self.model = (SAC if os.path.basename(checkpoint).startswith("sac_") else PPO).load(checkpoint, device="cpu")
         with open(vecnormalize_path(checkpoint), "rb") as f:
             self.norm = pickle.load(f)
         self.noise = noise
@@ -340,7 +344,7 @@ def warm_start(model, checkpoint, extra=0):
 
 def vecnormalize_path(checkpoint):
     """The observation/reward normalization stats saved next to a checkpoint."""
-    return re.sub(r"ppo_(\d+)_steps\.zip$", r"ppo_vecnormalize_\1_steps.pkl", checkpoint)
+    return re.sub(r"(ppo|sac)_(\d+)_steps\.zip$", r"\1_vecnormalize_\2_steps.pkl", checkpoint)
 
 
 class ProgressLog(BaseCallback):

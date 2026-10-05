@@ -1,6 +1,7 @@
-"""PPO policies for train.py. In their own module so checkpoints load from any script."""
+"""Policies for train.py (PPO) and rlpd.py (SAC). In their own module so checkpoints load from any script."""
 import torch
 from stable_baselines3.common.policies import ActorCriticPolicy
+from stable_baselines3.sac.policies import SACPolicy
 from torch import nn
 
 
@@ -105,3 +106,20 @@ if __name__ == "__main__":  # self-check: grown from a 2x256 policy, a GrownPoli
         assert torch.equal(plain.get_distribution(x).distribution.mean, grown.get_distribution(x).distribution.mean)
         assert torch.equal(plain.predict_values(x), grown.predict_values(x))
     print(f"ok: {sum(p.numel() for p in plain.parameters()):,} -> {sum(p.numel() for p in grown.parameters()):,} weights")
+
+
+class LayerNormSACPolicy(SACPolicy):
+    """SAC's policy with LayerNorm after each hidden layer of every Q-network (RLPD, Ball et al., 2023: it keeps the
+    critics from overestimating actions far from the data when half of each batch is offline transitions)."""
+
+    def make_critic(self, features_extractor=None):
+        critic = super().make_critic(features_extractor)
+        for i, q in enumerate(critic.q_networks):
+            layers = []
+            for m in q:
+                layers.append(m)
+                if isinstance(m, nn.Linear) and m is not q[-1]:
+                    layers.append(nn.LayerNorm(m.out_features))
+            critic.q_networks[i] = nn.Sequential(*layers)
+            critic.add_module(f"qf{i}", critic.q_networks[i])
+        return critic
