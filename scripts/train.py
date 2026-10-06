@@ -17,6 +17,7 @@ from stable_baselines3.common.vec_env import SubprocVecEnv, VecMonitor, VecNorma
 
 from goi_env import OBS_FIELDS, GoiEnv
 from goi_env.env import MOUSE, PREV_ACTIONS
+from collector import Collector, Spaces
 from policy import BigPolicy, BoundedMeanPolicy, GrownPolicy
 
 PROGRESS, HEAD, POT = (OBS_FIELDS.index(f) for f in ("progress", "head_contact", "pot_contact"))
@@ -420,6 +421,8 @@ def main():
     ap.add_argument("--grow", type=int, default=0,
                     help="with --net small: this many residual blocks at the end of each trunk, adding nothing until trained, "
                          "so a warm start keeps its behavior with more room to learn (policy.GrownPolicy, bounded mean)")
+    ap.add_argument("--collector", choices=("lockstep", "async"), default="lockstep",
+                    help="async: each game steps at its own pace in its own worker (collector.py); several times faster")
     ap.add_argument("--device", default="cpu", help="where the network trains: cpu (fastest for the small net) or cuda")
     ap.add_argument("--ent-coef", type=float, default=0.0, help="entropy bonus")
     ap.add_argument("--action-cost", type=float, default=0.0, help="reward cost per step of the mean squared action")
@@ -450,7 +453,9 @@ def main():
                     args.rewinds, args.traps, args.refresh, args.frontier, args.window, args.place,
                     [tuple(map(float, spot.split(":"))) for spot in args.place_at], args.demos, args.demo_share,
                     int(args.demo_back * 120 / args.k), args.demo_window, args.demo_curriculum, **env_kwargs)] * args.envs
-    venv = VecMonitor(SubprocVecEnv(envs), info_keywords=("best_progress", "from_bottom", "rewinds"))
+    collector = Collector(envs) if args.collector == "async" else None
+    venv = (Spaces(args.envs, collector.observation_space, collector.action_space) if collector else
+            VecMonitor(SubprocVecEnv(envs), info_keywords=("best_progress", "from_bottom", "rewinds")))
     try:
         if args.resume:
             venv = VecNormalize.load(vecnormalize_path(args.resume), venv)
@@ -488,8 +493,17 @@ def main():
                         model.policy.log_std.fill_(policy_kwargs.get("log_std_init", 0.0))
         save = CheckpointCallback(max(args.save_every // args.envs, 1), checkpoints, name_prefix="ppo",
                                   save_vecnormalize=True)
+        def save_checkpoint(path):
+            model.save(path)
+            venv.save(vecnormalize_path(path))
+
         try:
-            model.learn(args.steps, callback=[save, ProgressLog()], tb_log_name="tb", reset_num_timesteps=not args.resume)
+            if collector:
+                collector.learn(model, venv, args.steps, args.save_every, checkpoints, save_checkpoint,
+                                reset_num_timesteps=not args.resume)
+            else:
+                model.learn(args.steps, callback=[save, ProgressLog()], tb_log_name="tb",
+                            reset_num_timesteps=not args.resume)
         except KeyboardInterrupt:
             print("interrupted: saving a final checkpoint")
         final = os.path.join(checkpoints, f"ppo_{model.num_timesteps}_steps.zip")
@@ -499,6 +513,8 @@ def main():
     finally:
         with suppress(EOFError, BrokenPipeError, ConnectionError):  # workers may already be gone after Ctrl+C
             venv.close()
+            if collector:
+                collector.close()
 
 
 if __name__ == "__main__":
