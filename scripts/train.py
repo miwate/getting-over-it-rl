@@ -56,6 +56,8 @@ class Starts(gym.Wrapper):
     the last `demo_back` steps before each success (300: 10 s); a share of episodes start from one, so the agent
     practices from where it nearly succeeds. With `demo_window` (lo, hi), the states kept are instead those along that
     stretch of route progress, every third of a second (a climb.py path from the bottom: a section of the route).
+    With `demo_after` too, only states in that stretch after the path has been at that progress: where a game (e.g. a
+    marathon.py game) landed after falling from above, which the networks didn't recover from.
     With `demo_curriculum` too (the backward algorithm, Salimans & Chen 2018): demo starts come only from the path's
     last `back_k` states before the stretch's end, 10 (3 s) at first: half from its frontier (its earliest 5 states),
     half from anywhere in it; 5 more each time 30% of the last 20 frontier-started episodes reached the end. Uniform
@@ -66,9 +68,9 @@ class Starts(gym.Wrapper):
     """
 
     def __init__(self, env, saved_share=0.5, rewind_share=0.5, bin_size=2.0, fall=5.0, every=30, max_retries=3,
-                 trap_share=0.0, trap_after=150, pool=30, refresh=0.0, frontier=0.0, window=None, place=None, place_at=(), demos=None, demo_share=0.0, demo_back=300, demo_window=None, demo_curriculum=False):
+                 trap_share=0.0, trap_after=150, pool=30, refresh=0.0, frontier=0.0, window=None, place=None, place_at=(), demos=None, demo_share=0.0, demo_back=300, demo_window=None, demo_curriculum=False, demo_after=None):
         super().__init__(env)
-        self.demo_window = demo_window
+        self.demo_window, self.demo_after = demo_window, demo_after
         self.curriculum, self.back_k, self.outcomes, self.start = demo_curriculum, 10, [], None
         self.demo_path, self.demo_share, self.demo_back, self.demos = demos, demo_share, demo_back, []  # demo state ids
         self.refresh, self.frontier, self.window, self.bin = refresh, frontier, window, None
@@ -158,8 +160,15 @@ class Starts(gym.Wrapper):
         game = self.env.unwrapped
         z = np.load(path)
         for j, reached in enumerate(z["reached"]):
-            kept, ok = [], False
+            kept, ok, above = [], False, False
             for t, obs, _ in demo_steps(game, z, j):
+                if self.demo_window and self.demo_after is not None:  # where a game landed after falling from above
+                    lo, hi = self.demo_window
+                    above = above or obs[PROGRESS] >= self.demo_after
+                    if above and lo <= obs[PROGRESS] < hi and t % every == 0:
+                        kept.append(game.save_state())
+                        ok = True
+                    continue
                 if self.demo_window:  # the path's states along this stretch (a climb path from the bottom)
                     lo, hi = self.demo_window
                     if obs[PROGRESS] >= hi:
@@ -233,13 +242,13 @@ def demo_steps(game, z, j):
 
 def make_env(game_dir, k, episode_steps, stall_steps, saved_starts, rewinds, traps=0.0, refresh=0.0, frontier=0.0,
              window=None, place=None, place_at=(), demos=None, demo_share=0.0, demo_back=300, demo_window=None,
-             demo_curriculum=False, **env_kwargs):
+             demo_curriculum=False, demo_after=None, **env_kwargs):
     """env_kwargs: GoiEnv's action_cost, mouse and reward weights."""
     env = Starts(GoiEnv(game_dir, k=k, stall_steps=stall_steps, snake_ends=True, **env_kwargs), saved_starts, rewinds,
                  trap_share=traps,
                  trap_after=(stall_steps or 300) // 2, refresh=refresh, frontier=frontier, window=window, place=place,
                  place_at=place_at, demos=demos, demo_share=demo_share, demo_back=demo_back, demo_window=demo_window,
-                 demo_curriculum=demo_curriculum)
+                 demo_curriculum=demo_curriculum, demo_after=demo_after)
     return TimeLimit(env, episode_steps)
 
 
@@ -400,6 +409,8 @@ def main():
     ap.add_argument("--demo-back", type=float, default=10, help="with --demos: seconds before each success to start from")
     ap.add_argument("--demo-window", type=float, nargs=2, metavar=("LO", "HI"),
                     help="with --demos: start from the demos' states along this stretch of route progress instead")
+    ap.add_argument("--demo-after", type=float,
+                    help="with --demo-window: only the demos' states in the window after they have been at this progress")
     ap.add_argument("--demo-curriculum", action="store_true",
                     help="with --demo-window: start near the stretch's end first, moving back as episodes succeed")
     ap.add_argument("--place-at", nargs="+", default=[], metavar="ALONG:DX",
@@ -452,7 +463,7 @@ def main():
     envs = [partial(make_env, args.game_dir, args.k, args.episode_steps, stall_steps, args.saved_starts,
                     args.rewinds, args.traps, args.refresh, args.frontier, args.window, args.place,
                     [tuple(map(float, spot.split(":"))) for spot in args.place_at], args.demos, args.demo_share,
-                    int(args.demo_back * 120 / args.k), args.demo_window, args.demo_curriculum, **env_kwargs)] * args.envs
+                    int(args.demo_back * 120 / args.k), args.demo_window, args.demo_curriculum, args.demo_after, **env_kwargs)] * args.envs
     collector = Collector(envs) if args.collector == "async" else None
     venv = (Spaces(args.envs, collector.observation_space, collector.action_space) if collector else
             VecMonitor(SubprocVecEnv(envs), info_keywords=("best_progress", "from_bottom", "rewinds")))
