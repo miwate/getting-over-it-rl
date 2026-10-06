@@ -58,6 +58,7 @@ def _worker(conn, env_fn):
     policy = conn.recv().var()
     policy.set_training_mode(False)
     low, high = env.action_space.low, env.action_space.high
+    seed = int(os.environ["GOI_COLLECTOR_SEED"]) if "GOI_COLLECTOR_SEED" in os.environ else None
     obs, _ = env.reset()
     ret = ep_reward = 0.0
     ep_length, start = 0, True
@@ -77,8 +78,13 @@ def _worker(conn, env_fn):
                     return policy.predict_values(torch.as_tensor(norm(o)[None]))[0].item()
 
             O, A, V, L, R, S, raw, returns, episodes = [], [], [], [], [], [], [], [], []
+            if seed is not None:  # tests: the same noise as a lockstep run seeded alike
+                torch.manual_seed(seed)
+                seed = None
+            if policy.use_sde:  # as SB3: at the rollout's start, then every sde_freq steps from step 0
+                policy.reset_noise(1)
             for t in range(n):
-                if policy.use_sde and (t == 0 or sde_freq > 0 and t % sde_freq == 0):
+                if policy.use_sde and sde_freq > 0 and t % sde_freq == 0:
                     policy.reset_noise(1)
                 o = norm(obs)
                 with torch.no_grad():
