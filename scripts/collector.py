@@ -166,7 +166,7 @@ class Collector:
                               ("episode_starts", S)):
                 getattr(buf, name)[:] = np.stack(arr, 1).reshape(getattr(buf, name).shape)
             buf.pos, buf.full = buf.buffer_size, True
-            buf.compute_returns_and_advantage(torch.as_tensor(np.array(last_v)), np.array(last_done))
+            buf.compute_returns_and_advantage(torch.as_tensor(np.array(last_v, np.float32)), np.array(last_done))
             model.num_timesteps += n * len(self.conns)
             model._current_progress_remaining = 1.0 - model.num_timesteps / total
             model.train()
