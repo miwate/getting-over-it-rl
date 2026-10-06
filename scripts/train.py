@@ -93,7 +93,8 @@ class Starts(gym.Wrapper):
             self._seed_bins(self.place)
             self.place = []
         if self.demo_path:
-            self._seed_demos(self.demo_path, self.demo_back)
+            for path in [self.demo_path] if isinstance(self.demo_path, str) else self.demo_path:
+                self._seed_demos(path, self.demo_back)
             self.demo_path = None
         if self.curriculum and self.start == "frontier":  # how the last episode from the frontier went
             self.outcomes.append(game.best_progress >= self.demo_window[1])
@@ -404,7 +405,8 @@ def main():
                     help="saved starts only from this stretch of route progress (the chimney top: 170 200)")
     ap.add_argument("--place", type=float, nargs=2, metavar=("LO", "HI"),
                     help="seed the saved starts with the climber placed along this stretch of the route")
-    ap.add_argument("--demos", help="demonstrations to start episodes along (scripts/demos.py)")
+    ap.add_argument("--demos", nargs="+", help="demonstration files to start episodes along (scripts/demos.py, "
+                                               "climb.py, marathon arrival files)")
     ap.add_argument("--demo-share", type=float, default=0.3, help="with --demos: share of episodes that start along one")
     ap.add_argument("--demo-back", type=float, default=10, help="with --demos: seconds before each success to start from")
     ap.add_argument("--demo-window", type=float, nargs=2, metavar=("LO", "HI"),
