@@ -16,7 +16,7 @@ import torch
 
 from goi_env import OBS_FIELDS, GoiEnv
 from sections import SECTIONS
-from train import chain, parse_then
+from train import STALL_SECONDS, chain, parse_then
 
 PROGRESS, WON = OBS_FIELDS.index("progress"), OBS_FIELDS.index("won")
 FALL = 10  # progress lost from a local peak that counts as a fall
@@ -30,7 +30,8 @@ def play(seed, args):
     torch.set_num_threads(1)
     torch.manual_seed(seed)
     player = chain(args.checkpoint, parse_then(args.then), args.noise)
-    game = GoiEnv(args.game_dir)
+    # The agent's own record and stall count as in training episodes (GoiEnv record_reset; the stall count re-arms).
+    game = GoiEnv(args.game_dir, stall_steps=int(STALL_SECONDS * 30), stall_ends=False, record_reset=args.record_reset)
     actions, trace = [], []
     try:
         obs, _ = game.reset()
@@ -70,6 +71,8 @@ def main():
     ap.add_argument("--noise", type=float, default=0.5, help="noise of the chain's members without their own")
     ap.add_argument("--minutes", type=float, default=60, help="game time per game")
     ap.add_argument("--games", type=int, default=8)
+    ap.add_argument("--record-reset", type=float, default=5,
+                    help="the agent's record restarts after a fall of more than this (training's rewind threshold)")
     ap.add_argument("--out", required=True, help="path prefix for each game's .npz")
     ap.add_argument("--game-dir", default=os.environ.get("GOI_GAME_DIR"), help="install folder (or set GOI_GAME_DIR)")
     args = ap.parse_args()

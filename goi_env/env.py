@@ -57,12 +57,17 @@ class GoiEnv(gym.Env):
 
     def __init__(self, game_dir=None, port=None, k=4, n_rays=32, ray_length=15.0, time_penalty=0.001, stall_steps=None,
                  stall_ends=True, snake_ends=False, action_cost=0.0, mouse=MOUSE, recovery=0.0, regress=0.0, air_bonus=0.0, speed_bonus=0.0,
-                 render_mode=None, realtime=True, width=640, height=360, game_args=(), head_rays=0, head_length=4.0):
+                 render_mode=None, realtime=True, width=640, height=360, game_args=(), head_rays=0, head_length=4.0,
+                 record_reset=None):
         """Launches the game from game_dir on a free port, or with game_dir=None connects to one already running on
         `port` (default 5555).
 
         render_mode="human" shows the game window at real speed; realtime=False lets it run as fast as it can.
         render_mode="rgb_array" makes render() return the frame the game drew after the last step.
+        record_reset: for continuous play (no episodes): when the pot falls more than this below the record, the
+        record restarts from where it is, as a training episode would after a rewind. The observation's last field
+        (how far below the record) then stays in the range the networks trained on: after falls from 230-290 to ~105
+        it read ~125, and networks that climb from there 50/50 times froze for the rest of an hour.
         game_args: extra launch flags, e.g. ["-goi-colliders"] to draw the physics shapes over the game.
         action_cost: subtracted from the reward times the mean squared action, so big mouse moves have to pay off.
         mouse: mouse input at action 1.
@@ -74,6 +79,7 @@ class GoiEnv(gym.Env):
         self._frame_due = 0.0
         self.time_penalty = time_penalty
         self.stall_steps, self.stall_ends, self.snake_ends = stall_steps, stall_ends, snake_ends
+        self.record_reset = record_reset
         self.action_cost = action_cost
         self.mouse = mouse
         self.weights = dict(recovery=recovery, regress=regress, air_bonus=air_bonus, speed_bonus=speed_bonus)
@@ -108,6 +114,8 @@ class GoiEnv(gym.Env):
                   - self.time_penalty - self.action_cost * float(np.mean(a * a)))
         self._progress = raw[PROGRESS]
         self.best_progress = max(self.best_progress, raw[PROGRESS])
+        if self.record_reset is not None and self.best_progress - raw[PROGRESS] > self.record_reset:
+            self.best_progress = raw[PROGRESS]
         self.stalled += 1
         self._stall_mark = min(self._stall_mark, raw[PROGRESS])
         if raw[PROGRESS] >= self._stall_mark + 1.0:
