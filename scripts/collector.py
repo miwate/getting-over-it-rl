@@ -51,9 +51,8 @@ class Spaces(VecEnv):
         return [False] * self.num_envs
 
 
-def _worker(conn, env_fn, seed):
-    torch.set_num_threads(1)
-    torch.manual_seed(seed)
+def _worker(conn, env_fn):
+    torch.set_num_threads(1)  # its noise seed is random: runs differ, like lockstep ones
     env = env_fn.var()
     conn.send((env.observation_space, env.action_space))
     policy = conn.recv().var()
@@ -118,9 +117,9 @@ class Collector:
     def __init__(self, env_fns):
         ctx = mp.get_context("spawn")
         self.conns, self.procs = [], []
-        for i, fn in enumerate(env_fns):
+        for fn in env_fns:
             here, there = ctx.Pipe()
-            p = ctx.Process(target=_worker, args=(there, CloudpickleWrapper(fn), i), daemon=True)
+            p = ctx.Process(target=_worker, args=(there, CloudpickleWrapper(fn)), daemon=True)
             p.start()
             there.close()
             self.conns.append(here)
