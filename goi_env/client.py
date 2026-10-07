@@ -130,6 +130,20 @@ class GoiClient:
         to find what differs between two runs that should match. Derived from game data: never commit it."""
         self._call(b"e" + struct.pack("<i", tag))
 
+    def export_state(self, state_id):
+        """A saved state as bytes, which import_state loads in any other game (another launch too)."""
+        data = bytes(self._call(b"x" + struct.pack("<i", state_id)))
+        if not data:
+            raise KeyError(f"unknown state id {state_id}")
+        return data
+
+    def import_state(self, data):
+        """Exported state bytes as a new saved state in this game; returns its id."""
+        state_id = self._int(b"i" + struct.pack("<i", len(data)) + bytes(data))
+        if state_id < 0:
+            raise ValueError("the state doesn't fit this game (another level layout or plugin version)")
+        return state_id
+
     def drop_state(self, state_id):
         """Free a saved state in the game (each holds ~1 KB there until dropped)."""
         self._call(b"d" + struct.pack("<i", state_id))
@@ -219,6 +233,12 @@ def _smoke_test():
         print(f"100 steps, replay with rendering on ({rate:.0f} steps/s) vs off: max diff {worst(replay1, replay3):.3g}")
         print(f"100 steps, uninterrupted original vs replay after load: max diff {worst(original, replay1):.3g} "
               "(a load rebuilds the physics world, so these need not match)")
+        blob = c.export_state(sid)
+        twin = c.import_state(blob)
+        c.load_state(twin)
+        replay4 = [c.step(*a) for a in acts[200:]]
+        print(f"100 steps, replay from the state exported ({len(blob)} bytes) and imported vs replay 1: "
+              f"max diff {worst(replay1, replay4):.3g}")
         c.drop_state(sid)
         try:
             c.load_state(sid)

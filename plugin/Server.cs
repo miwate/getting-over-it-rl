@@ -16,6 +16,8 @@ using UnityEngine;
 //   'p' place(float along, float dx, float lift, float angle) -> obs, or empty if the climber overlaps the level there
 //   'e' dump_engine(int tag) -> empty: the engine's live state to BepInEx/goi-rl-engine-state-<tag>.jsonl (debugging)
 //   'f' frame -> int width, int height, then RGB rows top-down: the image rendered after the last step (render on)
+//   'x' export_state(int id) -> the saved state as bytes (empty for an unknown id), loadable in any other game
+//   'i' import_state(int n, then n bytes) -> int id of a new saved state, or -1 if it doesn't fit this level/plugin
 class Server
 {
     readonly TcpListener listener;
@@ -100,6 +102,16 @@ class Server
                         game.Drop(Int(0));
                         Send(0);
                         break;
+                    case 'x':
+                        Read(4);
+                        SendBytes(game.Export(Int(0)) ?? new byte[0]);
+                        break;
+                    case 'i':
+                        Read(4);
+                        var state = new byte[Int(0)];
+                        ReadInto(state);
+                        SendInt(game.Import(state));
+                        break;
                     case 'c':
                         Send(0);
                         Application.Quit();
@@ -157,6 +169,24 @@ class Server
             if (r == 0) throw new EndOfStreamException("client disconnected");
             got += r;
         }
+    }
+
+    void ReadInto(byte[] buffer)
+    {
+        for (int got = 0; got < buffer.Length;)
+        {
+            int r = client.Receive(buffer, got, buffer.Length - got, SocketFlags.None);
+            if (r == 0) throw new EndOfStreamException("client disconnected");
+            got += r;
+        }
+    }
+
+    void SendBytes(byte[] payload)
+    {
+        var data = new byte[4 + payload.Length];
+        Put(data, 0, payload.Length);
+        Buffer.BlockCopy(payload, 0, data, 4, payload.Length);
+        client.Send(data);
     }
 
     int Int(int offset) => BitConverter.ToInt32(input, offset);

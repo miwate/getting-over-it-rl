@@ -150,9 +150,17 @@ class GoiEnv(gym.Env):
         self._saved_best[state_id] = self.best_progress
         return state_id
 
+    def export_state(self, state_id):
+        return self.client.export_state(state_id)
+
+    def import_state(self, data):
+        """A state exported from any game (GoiClient.export_state) as a saved state here; loading it starts the record
+        at its own progress."""
+        return self.client.import_state(data)
+
     def load_state(self, state_id):
         raw = self.client.load_state(state_id)
-        self.best_progress = self._saved_best[state_id]
+        self.best_progress = self._saved_best.get(state_id, raw[PROGRESS])
         self._progress = self._stall_mark = raw[PROGRESS]
         self.stalled = 0  # a fresh try: the stuck signal mustn't carry over from whatever ran before
         self._actions = deque([(0.0, 0.0)] * PREV_ACTIONS, maxlen=PREV_ACTIONS)

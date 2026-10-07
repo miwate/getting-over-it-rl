@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Reflection;
 using FluffyUnderware.Curvy;
@@ -50,6 +51,7 @@ class Game
     readonly ContactFilter2D solid;
     readonly Snapshot start;
     readonly Dictionary<int, Snapshot> saves = new Dictionary<int, Snapshot>(); // ~1 KB each, until dropped
+    readonly Collider2D[] colliders; // every collider in the level, in a fixed order: contact keys of exported states
     // The snapshot the world was last rebuilt from, until the next step: a save then returns it. A capture of a rebuilt
     // world isn't bit-identical to what it was rebuilt from (the hammer Tip's out-of-plane pose round-trips through its
     // Transform, and its baked collider, inertia and centre of mass move in the last digits), so rebuilding twice
@@ -106,6 +108,8 @@ class Game
         controlFixedUpdate = Method(pc, "FixedUpdate");
         poseLateUpdate = Method(pose, "LateUpdate");
         solid = new ContactFilter2D { useTriggers = false, useLayerMask = true, layerMask = LayerMask.GetMask("Default", "Terrain") };
+        colliders = InLevel<Collider2D>().OrderBy(c => HierarchyKey(c.transform), StringComparer.Ordinal)
+            .ThenBy(c => Array.IndexOf(c.GetComponents<Collider2D>(), c)).ToArray(); // the same in every launch
         start = Capture();
         start.mw = tip.position; // what the scripts' Start() would set
         start.hammerSlide = start.potSlide = true;
@@ -271,6 +275,78 @@ class Game
     }
 
     public void Drop(int id) => saves.Remove(id);
+
+    // A saved state as bytes, and back in another game (another launch): a state found in one game can start play in
+    // any other, without replaying the moves that led there (long replays drift across launches). Bodies, hinges,
+    // teleporters and colliders are in hierarchy order, the same in every launch; contact keys travel as collider indices.
+    const int StateFormat = 1;
+
+    public byte[] Export(int id)
+    {
+        if (!saves.TryGetValue(id, out var s)) return null;
+        using (var m = new MemoryStream())
+        using (var w = new BinaryWriter(m))
+        {
+            foreach (var n in new[] { StateFormat, bodies.Length, hinges.Length, teleporters.Length, colliders.Length }) w.Write(n);
+            void V(Vector2 v) { w.Write(v.x); w.Write(v.y); }
+            for (int i = 0; i < bodies.Length; i++)
+            {
+                V(s.pos[i]); V(s.vel[i]); w.Write(s.rot[i]); w.Write(s.spin[i]); w.Write(s.z[i]);
+                w.Write(s.pose[i].x); w.Write(s.pose[i].y); w.Write(s.pose[i].z); w.Write(s.pose[i].w);
+                w.Write(s.active[i]); w.Write(s.awake[i]); w.Write((int)s.type[i]);
+            }
+            V(s.gravity); V(s.mw); V(s.mouseInput); V(s.oldMouse);
+            foreach (var f in new[] { s.simTime, s.giftTime, s.hingeSpeed, s.sliderSpeed, s.mouseSpeed, s.progress }) w.Write(f);
+            foreach (var b in new[] { s.won, s.mouseSnap, s.hammerSlide, s.potSlide, s.creditsUp, s.giftSpawned, s.giftOpened,
+                                      s.lakeReset }) w.Write(b);
+            foreach (var b in s.teleport) w.Write(b);
+            foreach (var a in s.hingeAngle) w.Write(a);
+            foreach (var keys in new[] { s.hammerKeys, s.potKeys })
+            {
+                w.Write(keys.Length);
+                foreach (var k in keys) w.Write(Array.IndexOf(colliders, k));
+            }
+            return m.ToArray();
+        }
+    }
+
+    // An exported state as a new save id, or -1 if it came from a different level layout or plugin version.
+    public int Import(byte[] data)
+    {
+        using (var r = new BinaryReader(new MemoryStream(data)))
+        {
+            foreach (var n in new[] { StateFormat, bodies.Length, hinges.Length, teleporters.Length, colliders.Length })
+                if (r.ReadInt32() != n) return -1;
+            Vector2 V() => new Vector2(r.ReadSingle(), r.ReadSingle());
+            int count = bodies.Length;
+            var s = new Snapshot
+            {
+                pos = new Vector2[count], vel = new Vector2[count], rot = new float[count], spin = new float[count],
+                z = new float[count], pose = new Quaternion[count], active = new bool[count], awake = new bool[count],
+                type = new RigidbodyType2D[count],
+            };
+            for (int i = 0; i < count; i++)
+            {
+                s.pos[i] = V(); s.vel[i] = V(); s.rot[i] = r.ReadSingle(); s.spin[i] = r.ReadSingle(); s.z[i] = r.ReadSingle();
+                s.pose[i] = new Quaternion(r.ReadSingle(), r.ReadSingle(), r.ReadSingle(), r.ReadSingle());
+                s.active[i] = r.ReadBoolean(); s.awake[i] = r.ReadBoolean(); s.type[i] = (RigidbodyType2D)r.ReadInt32();
+            }
+            s.gravity = V(); s.mw = V(); s.mouseInput = V(); s.oldMouse = V();
+            s.simTime = r.ReadSingle(); s.giftTime = r.ReadSingle(); s.hingeSpeed = r.ReadSingle();
+            s.sliderSpeed = r.ReadSingle(); s.mouseSpeed = r.ReadSingle(); s.progress = r.ReadSingle();
+            s.won = r.ReadBoolean(); s.mouseSnap = r.ReadBoolean(); s.hammerSlide = r.ReadBoolean(); s.potSlide = r.ReadBoolean();
+            s.creditsUp = r.ReadBoolean(); s.giftSpawned = r.ReadBoolean(); s.giftOpened = r.ReadBoolean(); s.lakeReset = r.ReadBoolean();
+            s.teleport = Enumerable.Range(0, 3 * teleporters.Length).Select(_ => r.ReadBoolean()).ToArray();
+            s.hingeAngle = Enumerable.Range(0, hinges.Length).Select(_ => r.ReadSingle()).ToArray();
+            Collider2D[] Keys() => Enumerable.Range(0, r.ReadInt32()).Select(_ => r.ReadInt32())
+                .Select(k => k >= 0 && k < colliders.Length ? colliders[k] : null).Where(c => c != null).ToArray();
+            s.hammerKeys = Keys();
+            s.potKeys = Keys();
+            int id = nextSave++;
+            saves[id] = s;
+            return id;
+        }
+    }
 
     // Start somewhere along the route instead of the bottom: the start state with the pot at the route point `along`
     // moved by (dx, lift), and the hammer swung about the hub to point at `angle` degrees, the cursor on its head. The
