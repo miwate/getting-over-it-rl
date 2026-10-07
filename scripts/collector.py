@@ -51,9 +51,23 @@ class Spaces(VecEnv):
         return [False] * self.num_envs
 
 
+GAME_LOST = (ConnectionError, OSError, EOFError)  # the game process died (rare: a space run lost one after 840k steps)
+
+
 def _worker(conn, env_fn):
     torch.set_num_threads(1)  # its noise seed is random: runs differ, like lockstep ones
     env = env_fn.var()
+
+    def fresh(error):
+        """A new game in place of one that died: the run goes on, the episode is lost."""
+        nonlocal env
+        print(f"collector: game lost ({error!r}); starting a new one", flush=True)
+        try:
+            env.close()
+        except Exception:
+            pass
+        env = env_fn.var()
+        return env.reset()[0]
     conn.send((env.observation_space, env.action_space))
     policy = conn.recv().var()
     policy.set_training_mode(False)
@@ -86,11 +100,16 @@ def _worker(conn, env_fn):
             for t in range(n):
                 if policy.use_sde and sde_freq > 0 and t % sde_freq == 0:
                     policy.reset_noise(1)
-                o = norm(obs)
-                with torch.no_grad():
-                    a, v, lp = policy(torch.as_tensor(o[None]))
-                a = a.numpy()[0]
-                new_obs, r, terminated, truncated, info = env.step(np.clip(a, low, high))
+                while True:
+                    o = norm(obs)
+                    with torch.no_grad():
+                        a, v, lp = policy(torch.as_tensor(o[None]))
+                    a = a.numpy()[0]
+                    try:
+                        new_obs, r, terminated, truncated, info = env.step(np.clip(a, low, high))
+                        break
+                    except GAME_LOST as e:  # a new episode in a new game, from this step
+                        obs, start, ret, ep_reward, ep_length = fresh(e), True, 0.0, 0.0, 0
                 ret = ret * gamma + r
                 raw.append(obs)
                 returns.append(ret)
@@ -107,7 +126,10 @@ def _worker(conn, env_fn):
                                                                        if k in info}))
                     ret = ep_reward = 0.0
                     ep_length = 0
-                    obs, _ = env.reset()
+                    try:
+                        obs, _ = env.reset()
+                    except GAME_LOST as e:
+                        obs = fresh(e)
                 else:
                     obs = new_obs
             conn.send((np.array(O), np.array(A), np.array(V, np.float32), np.array(L, np.float32),
