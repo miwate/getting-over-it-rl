@@ -1,8 +1,9 @@
 """The real test of the goal: chained networks play one continuous game each from the bottom for a long stretch of game
 time, as a person would: no save/load, no search, falls allowed, the Snake played on. Per game: the best progress and
 when each section was first reached, where the time went (the sections it was stuck in), and its big falls (from where
-to where). Each game's actions and progress are saved (<out>-<seed>.npz, demo format: replayable, so states where it got
-stuck can become training starts).
+to where). Each game's actions and progress are saved (<out>-<seed>.npz, demo format), and game states exported as it
+plays (<out>-<seed>-states.npz: where it first reached each section, and where it was every minute), which any game
+can load (train.py --demos, arrival_test.py): replaying a long game in another launch drifts.
 
     python scripts/marathon.py runs/rw-port/checkpoints/ppo_1500160_steps.zip --then 224:runs/bar-sil/checkpoints/ppo_7_steps.zip 250:runs/garden-path/checkpoints/ppo_10000000_steps.zip --minutes 60 --out runs/marathon/a
 """
@@ -20,6 +21,7 @@ from train import STALL_SECONDS, chain, parse_then
 
 PROGRESS, WON = OBS_FIELDS.index("progress"), OBS_FIELDS.index("won")
 FALL = 10  # progress lost from a local peak that counts as a fall
+ARRIVAL, PERIODIC, EVERY = 0, 1, 60 * 30  # kinds of exported states; a periodic one every minute of game time
 
 
 def section(p):
@@ -32,7 +34,15 @@ def play(seed, args):
     player = chain(args.checkpoint, parse_then(args.then), args.noise)
     # The agent's own record and stall count as in training episodes (GoiEnv record_reset; the stall count re-arms).
     game = GoiEnv(args.game_dir, stall_steps=int(STALL_SECONDS * 30), stall_ends=False, record_reset=args.record_reset)
-    actions, trace = [], []
+    actions, trace, states = [], [], []  # states: (progress, step, kind, exported bytes)
+    todo = [start for start, _ in SECTIONS[1:]]
+    obs = None
+
+    def export(kind):
+        sid = game.save_state()
+        states.append((float(obs[PROGRESS]), step, kind, game.export_state(sid)))
+        game.drop_state(sid)
+
     try:
         obs, _ = game.reset()
         for step in range(int(args.minutes * 60 * 30)):
@@ -42,12 +52,25 @@ def play(seed, args):
             trace.append(obs[PROGRESS])
             if obs[WON] > 0.5:
                 break
+            while todo and obs[PROGRESS] >= todo[0]:  # first arrival in a section
+                todo.pop(0)
+                export(ARRIVAL)
+            if step % EVERY == EVERY - 1:  # where it is every minute: where it gets stuck, mostly
+                export(PERIODIC)
+    except (ConnectionError, OSError, EOFError) as e:  # the game died (rare): keep what it played
+        print(f"game {seed}: lost after {len(trace) / 1800:.1f} min ({e!r})", flush=True)
     finally:
-        game.close()
+        try:
+            game.close()
+        except (ConnectionError, OSError):
+            pass
+    np.savez(f"{args.out}-{seed}-states.npz", exported=1, progress=np.array([s[0] for s in states], np.float32),
+             step=np.array([s[1] for s in states]), kind=np.array([s[2] for s in states]),
+             **{f"s{i}": np.frombuffer(s[3], np.uint8) for i, s in enumerate(states)})
     trace = np.array(trace, np.float32)
     np.savez(f"{args.out}-{seed}.npz", climb0=np.zeros((0, 2), np.float32), try0=np.array(actions),
              cuts0=np.array([0]), trace=trace, reached=np.array([len(actions) - 1]), goal=float(trace.max()))
-    return trace, bool(obs[WON] > 0.5)
+    return trace, obs is not None and bool(obs[WON] > 0.5)
 
 
 def falls(trace):

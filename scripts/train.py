@@ -58,6 +58,8 @@ class Starts(gym.Wrapper):
     stretch of route progress, every third of a second (a climb.py path from the bottom: a section of the route).
     With `demo_after` too, only states in that stretch after the path has been at that progress: where a game (e.g. a
     marathon.py game) landed after falling from above, which the networks didn't recover from.
+    A demos file of exported states (marathon.py's <out>-<seed>-states.npz) is loaded as it is: its states in
+    `demo_window` become starts, without replaying the moves that led there.
     With `demo_curriculum` too (the backward algorithm, Salimans & Chen 2018): demo starts come only from the path's
     last `back_k` states before the stretch's end, 10 (3 s) at first: half from its frontier (its earliest 5 states),
     half from anywhere in it; 5 more each time 30% of the last 20 frontier-started episodes reached the end. Uniform
@@ -160,6 +162,12 @@ class Starts(gym.Wrapper):
     def _seed_demos(self, path, back=300, every=10):
         game = self.env.unwrapped
         z = np.load(path)
+        if "exported" in z.files:  # states exported by other games (marathon.py): loaded as they are, no replay
+            lo, hi = self.demo_window or (-np.inf, np.inf)
+            for i, p in enumerate(z["progress"]):
+                if lo <= p < hi:
+                    self.demos.append(game.import_state(z[f"s{i}"].tobytes()))
+            return
         for j, reached in enumerate(z["reached"]):
             kept, ok, above = [], False, False
             for t, obs, _ in demo_steps(game, z, j):

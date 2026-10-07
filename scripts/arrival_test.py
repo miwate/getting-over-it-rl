@@ -1,0 +1,91 @@
+"""From where marathon games first arrived at a stretch of the route (marathon.py's exported states, loaded exactly: no
+replay), how often does each candidate cross it (reach GOAL within SECONDS) and how far does it get, playing as in a
+marathon (episode-like record and stall count)? Candidates are judged on the same states and seeds. One game per state.
+
+    python scripts/arrival_test.py 415 465 90 runs/chapel-a/checkpoints/ppo_10004480_steps.zip@1 --states runs/marathon/m8-*-states.npz
+"""
+import argparse
+import glob
+import os
+from concurrent.futures import ProcessPoolExecutor
+from itertools import repeat
+
+import numpy as np
+import torch
+
+from goi_env import OBS_FIELDS, GoiEnv
+from train import STALL_SECONDS, Player
+
+PROGRESS = OBS_FIELDS.index("progress")
+ARRIVAL = 0  # marathon.py's kind of a state saved where a game first reached a section
+
+
+def arrivals(files, at, goal):
+    """(file, index) of each game's state where it first reached `at` (an arrival export at a section start), else its
+    first state in [at, goal)."""
+    out = []
+    for f in files:
+        z = np.load(f)
+        p, kind = z["progress"], z["kind"]
+        first = [i for i in range(len(p)) if kind[i] == ARRIVAL and at <= p[i] < at + 3] or \
+            [i for i in range(len(p)) if at <= p[i] < goal]
+        if first:
+            out.append((f, first[0]))
+    return out
+
+
+def run(state, args, candidates):
+    f, i = state
+    torch.set_num_threads(1)
+    game = GoiEnv(args.game_dir, stall_steps=int(STALL_SECONDS * 30), stall_ends=False, record_reset=5)
+    try:
+        sid = game.import_state(np.load(f)[f"s{i}"].tobytes())
+        out = []
+        for spec in candidates:
+            path, _, noise = spec.partition("@")
+            player = Player(path, float(noise or 0.5))
+            wins, gain = 0, 0.0
+            for k in range(args.tries):
+                torch.manual_seed(k)
+                obs = game.load_state(sid)
+                start = best = obs[PROGRESS]
+                for step in range(int(args.seconds * 30)):
+                    obs, *_ = game.step(player(obs, step))
+                    best = max(best, obs[PROGRESS])
+                    if best >= args.goal:
+                        wins += 1
+                        break
+                gain += min(best, args.goal) - start
+            out.append((wins, gain / args.tries))
+        return out
+    finally:
+        game.close()
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("at", type=float, help="the stretch's start (a section start: marathon.py exports arrivals there)")
+    ap.add_argument("goal", type=float)
+    ap.add_argument("seconds", type=float)
+    ap.add_argument("candidates", nargs="+", help="checkpoints, each with @NOISE (default 0.5)")
+    ap.add_argument("--states", nargs="+", required=True, help="marathon.py's exported state files (globs work)")
+    ap.add_argument("--tries", type=int, default=10)
+    ap.add_argument("--game-dir", default=os.environ.get("GOI_GAME_DIR"), help="install folder (or set GOI_GAME_DIR)")
+    args = ap.parse_args()
+    if not args.game_dir:
+        ap.error("pass --game-dir or set GOI_GAME_DIR")
+    states = arrivals(sorted(f for pattern in args.states for f in glob.glob(pattern)), args.at, args.goal)
+    if not states:
+        raise SystemExit(f"no exported state at {args.at:.0f}-{args.goal:.0f}")
+    with ProcessPoolExecutor(len(states)) as ex:
+        res = list(ex.map(run, states, repeat(args), repeat(args.candidates)))
+    print(f"reach {args.goal:.0f} within {args.seconds:.0f} s from {len(states)} marathon arrivals at {args.at:.0f} "
+          f"({args.tries} tries each):")
+    for c, spec in enumerate(args.candidates):
+        wins = sum(r[c][0] for r in res)
+        gain = sum(r[c][1] for r in res) / len(res)
+        print(f"  {wins:3d}/{args.tries * len(res)} gain {gain:5.1f} {spec}   per state: {[r[c][0] for r in res]}")
+
+
+if __name__ == "__main__":
+    main()
