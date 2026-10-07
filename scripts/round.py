@@ -59,6 +59,8 @@ def main():
     ap.add_argument("--seconds", type=float, default=90, help="arrival test: game time to reach hi")
     ap.add_argument("--extra", nargs=argparse.REMAINDER, default=[], help="more train.py arguments (e.g. --regress 1)")
     args = ap.parse_args()
+    if not os.environ.get("GOI_GAME_DIR"):
+        ap.error("set GOI_GAME_DIR to the game's install folder")
     os.chdir(ROOT)
     chain = json.load(open("runs/chain.json"))
     n = latest_marathon()
