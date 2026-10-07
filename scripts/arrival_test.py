@@ -14,7 +14,7 @@ import numpy as np
 import torch
 
 from goi_env import OBS_FIELDS, GoiEnv
-from train import STALL_SECONDS, Player
+from train import STALL_SECONDS, Player, demo_steps
 
 PROGRESS = OBS_FIELDS.index("progress")
 ARRIVAL = 0  # marathon.py's kind of a state saved where a game first reached a section
@@ -39,7 +39,15 @@ def run(state, args, candidates):
     torch.set_num_threads(1)
     game = GoiEnv(args.game_dir, stall_steps=int(STALL_SECONDS * 30), stall_ends=False, record_reset=5)
     try:
-        sid = game.import_state(np.load(f)[f"s{i}"].tobytes())
+        if i is None:  # no marathon got here: where the path first reaches `at`
+            for _, obs, _ in demo_steps(game, np.load(f), 0):
+                if obs[PROGRESS] >= args.at:
+                    sid = game.save_state()
+                    break
+            else:
+                raise RuntimeError(f"{f} never reaches {args.at}")
+        else:
+            sid = game.import_state(np.load(f)[f"s{i}"].tobytes())
         out = []
         for spec in candidates:
             path, _, noise = spec.partition("@")
@@ -69,14 +77,17 @@ def main():
     ap.add_argument("seconds", type=float)
     ap.add_argument("candidates", nargs="+", help="checkpoints, each with @NOISE (default 0.5)")
     ap.add_argument("--states", nargs="+", required=True, help="marathon.py's exported state files (globs work)")
+    ap.add_argument("--path", default=os.path.join("runs", "climbs", "win-e4.npz"),
+                    help="with no exported state at the stretch: start where this path reaches it")
     ap.add_argument("--tries", type=int, default=10)
     ap.add_argument("--game-dir", default=os.environ.get("GOI_GAME_DIR"), help="install folder (or set GOI_GAME_DIR)")
     args = ap.parse_args()
     if not args.game_dir:
         ap.error("pass --game-dir or set GOI_GAME_DIR")
     states = arrivals(sorted(f for pattern in args.states for f in glob.glob(pattern)), args.at, args.goal)
-    if not states:
-        raise SystemExit(f"no exported state at {args.at:.0f}-{args.goal:.0f}")
+    if not states:  # no marathon game got here yet: the path's state, tried 4 times as often
+        print(f"no exported state at {args.at:.0f}-{args.goal:.0f}: from {args.path}")
+        states, args.tries = [(args.path, None)], args.tries * 4
     with ProcessPoolExecutor(len(states)) as ex:
         res = list(ex.map(run, states, repeat(args), repeat(args.candidates)))
     print(f"reach {args.goal:.0f} within {args.seconds:.0f} s from {len(states)} marathon arrivals at {args.at:.0f} "
