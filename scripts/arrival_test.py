@@ -77,8 +77,9 @@ def main():
     ap.add_argument("seconds", type=float)
     ap.add_argument("candidates", nargs="+", help="checkpoints, each with @NOISE (default 0.5)")
     ap.add_argument("--states", nargs="+", required=True, help="marathon.py's exported state files (globs work)")
-    ap.add_argument("--path", default=os.path.join("runs", "climbs", "win-e4.npz"),
-                    help="with no exported state at the stretch: start where this path reaches it")
+    ap.add_argument("--path", default=os.path.join("runs", "climbs", "win-e4-states.npz"),
+                    help="with no exported state at the stretch: start where this path reaches it (its exported "
+                         "states, path_states.py, or the path itself, replayed)")
     ap.add_argument("--tries", type=int, default=10)
     ap.add_argument("--game-dir", default=os.environ.get("GOI_GAME_DIR"), help="install folder (or set GOI_GAME_DIR)")
     args = ap.parse_args()
@@ -87,7 +88,9 @@ def main():
     states = arrivals(sorted(f for pattern in args.states for f in glob.glob(pattern)), args.at, args.goal)
     if not states:  # no marathon game got here yet: the path's state, tried 4 times as often
         print(f"no exported state at {args.at:.0f}-{args.goal:.0f}: from {args.path}")
-        states, args.tries = [(args.path, None)], args.tries * 4
+        exported = "exported" in np.load(args.path).files  # path_states.py's: loaded, not replayed
+        states = arrivals([args.path], args.at, args.goal) if exported else [(args.path, None)]
+        args.tries *= 4
     with ProcessPoolExecutor(len(states)) as ex:
         res = list(ex.map(run, states, repeat(args), repeat(args.candidates)))
     print(f"reach {args.goal:.0f} within {args.seconds:.0f} s from {len(states)} marathon arrivals at {args.at:.0f} "

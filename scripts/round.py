@@ -19,7 +19,7 @@ import time
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PY = sys.executable
 LOG = os.path.join("runs", "rounds.txt")
-STEPS = 10_000_000
+PATH_STATES = os.path.join("runs", "climbs", "win-e4-states.npz")  # the search agent's winning path (path_states.py)
 
 
 def log(msg):
@@ -57,6 +57,10 @@ def main():
     ap.add_argument("lo", type=float, help="the stretch's start: a section start (sections.SECTIONS)")
     ap.add_argument("hi", type=float)
     ap.add_argument("--seconds", type=float, default=90, help="arrival test: game time to reach hi")
+    ap.add_argument("--runs", type=int, default=2, help="training runs (a run of this recipe learns a stretch or not)")
+    ap.add_argument("--steps", type=int, default=10_000_000, help="steps per run")
+    ap.add_argument("--marathons", type=int, default=1, help="exported states from this many latest marathons")
+    ap.add_argument("--seeds", nargs="*", default=[], help="more exported starts, e.g. seeds.py's for a hard move")
     ap.add_argument("--extra", nargs=argparse.REMAINDER, default=[], help="more train.py arguments (e.g. --regress 1)")
     args = ap.parse_args()
     if not os.environ.get("GOI_GAME_DIR"):
@@ -68,30 +72,30 @@ def main():
         n += 1
         log(f"== marathon m{n} for exported states")
         marathon(n, chain)
-    states = sorted(glob.glob(f"runs/marathon/m{n}-*-states.npz"))
+    states = sorted(f for k in range(n - args.marathons + 1, n + 1) for f in glob.glob(f"runs/marathon/m{k}-*-states.npz"))
     lo, hi = args.lo, args.hi
     current = [spec for start, spec in chain if start <= lo][-1]
     log(f"== round {args.name} {lo:.0f}-{hi:.0f}: states from m{n}; current {current}")
     common = ["--collector", "async", "--gsde", "--bounded-mean", "--envs", "10", "--demo-share", "0.6",
               "--saved-starts", "0.2", "--traps", "0.2", "--rewinds", "1.0", "--episode-steps", "1800",
-              "--save-every", "2000000", "--demos", *states, "runs/climbs/win-e4.npz", "--demo-window", str(lo), str(hi),
-              "--demo-after", str(lo), "--window", str(lo - 6), str(hi + 5), *args.extra]
-    runs = [f"{args.name}-m{n}-a", f"{args.name}-m{n}-b"]
+              "--save-every", "2000000", "--demos", *states, *args.seeds, PATH_STATES, "--demo-window", str(lo), str(hi),
+              "--window", str(lo - 6), str(hi + 5), *args.extra]
+    runs = [f"{args.name}-m{n}-{chr(ord('a') + k)}" for k in range(args.runs)]
     for run in runs:
         ckpt = last_checkpoint(run)
-        if ckpt and steps_of(ckpt) >= STEPS:
+        if ckpt and steps_of(ckpt) >= args.steps:
             continue
         with open(f"runs/{run}.log", "a") as f:
             if ckpt:
                 log(f"   {run} resumed at {steps_of(ckpt)}")
-                start = ["--resume", ckpt, "--steps", str(STEPS - steps_of(ckpt))]
+                start = ["--resume", ckpt, "--steps", str(args.steps - steps_of(ckpt))]
             else:
                 log(f"   {run} from {current.partition('@')[0]}")
-                start = ["--warm-start", current.partition("@")[0], "--steps", str(STEPS)]
+                start = ["--warm-start", current.partition("@")[0], "--steps", str(args.steps)]
             subprocess.run([PY, "scripts/train.py", "--name", run, *start, *common], stdout=f, stderr=subprocess.STDOUT)
     candidates = [f"{last_checkpoint(r)}@{noise}".replace("\\", "/") for r in runs for noise in (1, 0.5)] + [current]
     test = subprocess.run([PY, "scripts/arrival_test.py", str(lo), str(hi), str(args.seconds), *candidates,
-                           "--states", *states], capture_output=True, text=True).stdout
+                           "--states", *states, "--path", PATH_STATES], capture_output=True, text=True).stdout
     scores = {}
     for line in test.splitlines():
         m = re.match(r"\s+(\d+)/(\d+) gain\s+(-?[\d.]+) (\S+)", line)
