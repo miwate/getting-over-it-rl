@@ -2,8 +2,9 @@
 time, as a person would: no save/load, no search, falls allowed, the Snake played on. Per game: the best progress and
 when each section was first reached, where the time went (the sections it was stuck in), and its big falls (from where
 to where). Each game's actions and progress are saved (<out>-<seed>.npz, demo format), and game states exported as it
-plays (<out>-<seed>-states.npz: where it first reached each section, and where it was every minute), which any game
-can load (train.py --demos, arrival_test.py): replaying a long game in another launch drifts.
+plays (<out>-<seed>-states.npz: where it first reached each section start and each multiple of 5, and where it was
+every minute), which any game can load (train.py --demos, arrival_test.py): replaying a long game in another launch
+drifts.
 
     python scripts/marathon.py runs/rw-port/checkpoints/ppo_1500160_steps.zip --then 224:runs/bar-sil/checkpoints/ppo_7_steps.zip 250:runs/garden-path/checkpoints/ppo_10000000_steps.zip --minutes 60 --out runs/marathon/a
 """
@@ -22,6 +23,7 @@ from train import STALL_SECONDS, chain, parse_then
 PROGRESS, WON = OBS_FIELDS.index("progress"), OBS_FIELDS.index("won")
 FALL = 10  # progress lost from a local peak that counts as a fall
 ARRIVAL, PERIODIC, EVERY = 0, 1, 60 * 30  # kinds of exported states; a periodic one every minute of game time
+MARK = 5  # an arrival state the first time a game reaches each multiple of this (and each section start)
 
 
 def section(p):
@@ -35,7 +37,7 @@ def play(seed, args):
     # The agent's own record and stall count as in training episodes (GoiEnv record_reset; the stall count re-arms).
     game = GoiEnv(args.game_dir, stall_steps=int(STALL_SECONDS * 30), stall_ends=False, record_reset=args.record_reset)
     actions, trace, states = [], [], []  # states: (progress, step, kind, exported bytes)
-    todo = [start for start, _ in SECTIONS[1:]]
+    todo = sorted(set(start for start, _ in SECTIONS[1:]) | set(range(MARK, int(SECTIONS[-1][0]) + 1, MARK)))
     obs = None
 
     def export(kind):
@@ -52,7 +54,7 @@ def play(seed, args):
             trace.append(obs[PROGRESS])
             if obs[WON] > 0.5:
                 break
-            while todo and obs[PROGRESS] >= todo[0]:  # first arrival in a section
+            while todo and obs[PROGRESS] >= todo[0]:  # first arrival at a mark (stretches start anywhere, e.g. 430)
                 todo.pop(0)
                 export(ARRIVAL)
             if step % EVERY == EVERY - 1:  # where it is every minute: where it gets stuck, mostly
