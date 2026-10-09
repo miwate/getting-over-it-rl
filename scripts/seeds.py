@@ -89,13 +89,12 @@ def run(job, args):
                     out.append((float(obs[PROGRESS]), t, game.export_state(s)))
                     game.drop_state(s)
                 obs, *_ = game.step(a)
-            print(f"{os.path.basename(f)} #{i}: through to {obs[PROGRESS]:.1f} in {len(path) / 30:.0f} s; "
-                  f"{len(out)} states", flush=True)
+            msg = f"through to {obs[PROGRESS]:.1f} in {len(path) / 30:.0f} s; {len(out)} states"
         else:
-            print(f"{os.path.basename(f)} #{i}: no way through", flush=True)
+            msg = "no way through"
     finally:
         game.close()
-    return out
+    return f"{os.path.basename(f)} #{i}: {msg}", out
 
 
 def main():
@@ -130,9 +129,12 @@ def main():
     rng = np.random.default_rng(0)
     picked = [pool[i] for i in sorted(rng.choice(len(pool), min(args.starts, len(pool)), replace=False))]
     jobs = [(f, i, r) for r in range(args.repeats) for f, i in picked]
-    print(f"{len(pool)} start states at {args.at:.0f}-{args.to:.0f}; searching from {len(picked)} x {args.repeats}")
+    print(f"{len(pool)} start states at {args.at:.0f}-{args.to:.0f}; searching from {len(picked)} x {args.repeats}", flush=True)
     with ProcessPoolExecutor(min(args.games, len(jobs))) as ex:
-        found = [s for part in ex.map(run, jobs, repeat(args)) for s in part]
+        found = []
+        for msg, part in ex.map(run, jobs, repeat(args)):  # printed here: workers' own output is lost when detached
+            print(msg, flush=True)
+            found += part
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     np.savez(args.out, exported=1, progress=np.array([s[0] for s in found], np.float32),
              step=np.array([s[1] for s in found]), kind=np.full(len(found), PERIODIC),
