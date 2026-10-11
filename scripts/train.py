@@ -70,17 +70,21 @@ class Starts(gym.Wrapper):
     before the hard states were learned (chapel: 40 states back in training, 0/10 from 8 s before the end).
     With `demo_priority` (reverse curriculum by success rate: Florensa et al. 2017, Salimans & Chen 2018, prioritized
     replay of levels, Jiang et al. 2021): each demo state's tries and successes (reaching the window's end) are counted,
-    decayed by 0.9 a try, and starts are drawn with weight p(1 - p) + 0.01, p = (successes + 1) / (tries + 2): practice
-    goes where the outcome is still open, which moves back along every path as the agent learns. Below the chapel jump
-    the networks finished from 1 s before the end 84-88% of the time, from 2 s 14-22%, from 3 s 3-4%.
+    decayed by 0.9 a try, and starts are drawn with weight (p(1 - p))^2 + 0.001, p = (successes + 1) / (tries + 2):
+    practice goes where the outcome is still open (~10x a decided start's share), which moves back along every path as
+    the agent learns. Below the chapel jump the networks finished from 1 s before the end 84-88% of the time, from 2 s
+    14-22%, from 3 s 3-4%. The counts are shared by the run's games through the `demo_stats` file (they load the same
+    exported states in the same order, checked by progress): counted per game, each start had ~3 tries a game and the
+    prior kept every p within 0.1-0.9.
 
     Infos carry from_bottom and rewinds (1 or 0). Bottom starts without rewinds play the real game.
     """
 
     def __init__(self, env, saved_share=0.5, rewind_share=0.5, bin_size=2.0, fall=5.0, every=30, max_retries=3,
-                 trap_share=0.0, trap_after=150, pool=30, refresh=0.0, frontier=0.0, window=None, place=None, place_at=(), demos=None, demo_share=0.0, demo_back=300, demo_window=None, demo_curriculum=False, demo_after=None, demo_priority=False, falls_terminal=False):
+                 trap_share=0.0, trap_after=150, pool=30, refresh=0.0, frontier=0.0, window=None, place=None, place_at=(), demos=None, demo_share=0.0, demo_back=300, demo_window=None, demo_curriculum=False, demo_after=None, demo_priority=False, falls_terminal=False, demo_stats=None):
         super().__init__(env)
-        self.demo_priority, self.tries, self.demo_sid, self.tried = demo_priority, {}, None, 0  # tries: id -> (n, wins)
+        self.demo_priority, self.demo_stats, self.stats, self.demo_i, self.tried = demo_priority, demo_stats, None, None, 0
+        self.demo_progress = []  # each demo state's progress (None once a replayed demo is loaded: games may differ)
         self.falls_terminal = falls_terminal
         self.demo_window, self.demo_after = demo_window, demo_after
         self.curriculum, self.back_k, self.outcomes, self.start = demo_curriculum, 10, [], None
@@ -108,6 +112,8 @@ class Starts(gym.Wrapper):
             for path in [self.demo_path] if isinstance(self.demo_path, str) else self.demo_path:
                 self._seed_demos(path, self.demo_back)
             self.demo_path = None
+            if self.demo_priority:
+                self.stats = self._open_stats()
         if self.curriculum and self.start == "frontier":  # how the last episode from the frontier went
             self.outcomes.append(game.best_progress >= self.demo_window[1])
             if len(self.outcomes) >= 20:
@@ -116,15 +122,16 @@ class Starts(gym.Wrapper):
                     print(f"curriculum: starts from the last {self.back_k} of {len(self.demos)} path states", flush=True)
                 self.outcomes = []
         if self.demo_priority and self.start == "demo":  # how the last episode from a demo start went
-            n, wins = self.tries.get(self.demo_sid, (0.0, 0.0))
-            self.tries[self.demo_sid] = (0.9 * n + 1, 0.9 * wins + (game.best_progress >= self.demo_window[1]))
+            n, wins = self.stats[self.demo_i, :2]
+            self.stats[self.demo_i, :2] = (0.9 * n + 1, 0.9 * wins + (game.best_progress >= self.demo_window[1]))
             self.tried += 1
             if self.tried % 1000 == 0:
-                stats = np.array([self.tries.get(d, (0.0, 0.0)) for d in self.demos])
-                seen = stats[:, 0] > 0
-                p = (stats[seen, 1] + 1) / (stats[seen, 0] + 2)
-                print(f"demo starts: {seen.sum()} of {len(self.demos)} tried; success {p.mean():.2f} on average, "
-                      f"{np.mean((p > 0.1) & (p < 0.9)):.0%} of them between 0.1 and 0.9", flush=True)
+                n, wins = self.stats[:, 0], self.stats[:, 1]
+                p, w, known = (wins + 1) / (n + 2), self._weights(self.stats), n >= 3
+                open_ = known & (p >= 0.1) & (p <= 0.9)
+                print(f"demo starts: {np.mean(n > 0):.0%} of {len(n)} tried; with 3+ tries: {np.mean(p[known] < 0.1):.0%} "
+                      f"hopeless, {np.mean(p[known] > 0.9):.0%} done, {np.mean(open_[known]):.0%} open (drawn "
+                      f"{w[open_].sum() / w.sum():.0%} of the time)", flush=True)
         options = dict(options or {})
         for state, _ in self.recent:
             game.drop_state(state)
@@ -145,14 +152,14 @@ class Starts(gym.Wrapper):
                 self.start = "trap"
             elif self.demos and r < self.trap_share + self.demo_share:
                 pool = self.demos[-self.back_k:] if self.curriculum else self.demos
+                first = len(self.demos) - len(pool)
                 frontier = self.curriculum and self.rng.random() < 0.5
                 if frontier:
                     pool = pool[:5]
                 if self.demo_priority:
-                    stats = np.array([self.tries.get(d, (0.0, 0.0)) for d in pool])
-                    p = (stats[:, 1] + 1) / (stats[:, 0] + 2)
-                    weights = p * (1 - p) + 0.01
-                    options["state"] = self.demo_sid = pool[self.rng.choice(len(pool), p=weights / weights.sum())]
+                    weights = self._weights(self.stats[first:first + len(pool)])
+                    self.demo_i = first + self.rng.choice(len(pool), p=weights / weights.sum())
+                    options["state"] = self.demos[self.demo_i]
                 else:
                     options["state"] = pool[self.rng.integers(len(pool))]
                 self.start = "frontier" if frontier else "demo"
@@ -185,6 +192,28 @@ class Starts(gym.Wrapper):
             if b not in self.bins and (obs[HEAD] or obs[POT]):
                 self.bins[b] = [game.save_state(), 0]
 
+    @staticmethod
+    def _weights(stats):
+        p = (stats[:, 1] + 1) / (stats[:, 0] + 2)
+        return (p * (1 - p)) ** 2 + 1e-3
+
+    def _open_stats(self):
+        """(tries, successes, progress) per demo state: the rows of the shared demo_stats file if this game's demo
+        states are the file's (same progress, same order), else this game's own."""
+        n = len(self.demos)
+        if self.demo_stats and self.demo_progress is not None and os.path.exists(self.demo_stats):
+            shared = np.load(self.demo_stats, mmap_mode="r+")
+            if n <= len(shared):
+                rows = shared[:n]
+                if not rows[:, 2].any():
+                    rows[:, 2] = self.demo_progress
+                if np.allclose(rows[:, 2], self.demo_progress):
+                    return rows
+            print("demo stats: this game's demo states differ from the shared file's; counting alone", flush=True)
+        stats = np.zeros((n, 3))
+        stats[:, 2] = self.demo_progress or 0.0
+        return stats
+
     def _seed_demos(self, path, back=300, every=10):
         game = self.env.unwrapped
         z = np.load(path)
@@ -195,7 +224,10 @@ class Starts(gym.Wrapper):
             for i in range(len(p)):
                 if lo <= p[i] < hi and step[i] > after:
                     self.demos.append(game.import_state(z[f"s{i}"].tobytes()))
+                    if self.demo_progress is not None:
+                        self.demo_progress.append(float(p[i]))
             return
+        self.demo_progress = None
         for j, reached in enumerate(z["reached"]):
             kept, ok, above = [], False, False
             for t, obs, _ in demo_steps(game, z, j):
@@ -282,14 +314,15 @@ def demo_steps(game, z, j):
 
 def make_env(game_dir, k, episode_steps, stall_steps, saved_starts, rewinds, traps=0.0, refresh=0.0, frontier=0.0,
              window=None, place=None, place_at=(), demos=None, demo_share=0.0, demo_back=300, demo_window=None,
-             demo_curriculum=False, demo_after=None, demo_priority=False, falls_terminal=False, **env_kwargs):
+             demo_curriculum=False, demo_after=None, demo_priority=False, falls_terminal=False, demo_stats=None,
+             **env_kwargs):
     """env_kwargs: GoiEnv's action_cost, mouse and reward weights."""
     env = Starts(GoiEnv(game_dir, k=k, stall_steps=stall_steps, snake_ends=True, **env_kwargs), saved_starts, rewinds,
                  trap_share=traps,
                  trap_after=(stall_steps or 300) // 2, refresh=refresh, frontier=frontier, window=window, place=place,
                  place_at=place_at, demos=demos, demo_share=demo_share, demo_back=demo_back, demo_window=demo_window,
                  demo_curriculum=demo_curriculum, demo_after=demo_after, demo_priority=demo_priority,
-                 falls_terminal=falls_terminal)
+                 falls_terminal=falls_terminal, demo_stats=demo_stats)
     return TimeLimit(env, episode_steps)
 
 
@@ -518,13 +551,18 @@ def main():
     run_dir = os.path.join("runs", args.name)
     checkpoints = os.path.join(run_dir, "checkpoints")
     stall_steps = int(args.stall_seconds * 120 / args.k) or None
+    demo_stats = os.path.join(run_dir, "demo-stats.npy") if args.demo_priority else None
+    if demo_stats and not os.path.exists(demo_stats):  # the games' shared success counts per demo state
+        os.makedirs(run_dir, exist_ok=True)
+        np.lib.format.open_memmap(demo_stats, mode="w+", dtype=np.float64, shape=(200_000, 3)).flush()
     env_kwargs = dict(head_rays=args.head_rays, action_cost=args.action_cost, mouse=args.mouse, recovery=args.recovery, regress=args.regress,
                       air_bonus=args.air_bonus, speed_bonus=args.speed_bonus, held_records=args.held_records)
     envs = [partial(make_env, args.game_dir, args.k, args.episode_steps, stall_steps, args.saved_starts,
                     args.rewinds, args.traps, args.refresh, args.frontier, args.window, args.place,
                     [tuple(map(float, spot.split(":"))) for spot in args.place_at], args.demos, args.demo_share,
                     int(args.demo_back * 120 / args.k), args.demo_window, args.demo_curriculum, args.demo_after,
-                    demo_priority=args.demo_priority, falls_terminal=args.falls_terminal, **env_kwargs)] * args.envs
+                    demo_priority=args.demo_priority, falls_terminal=args.falls_terminal, demo_stats=demo_stats,
+                    **env_kwargs)] * args.envs
     collector = Collector(envs) if args.collector == "async" else None
     venv = (Spaces(args.envs, collector.observation_space, collector.action_space) if collector else
             VecMonitor(SubprocVecEnv(envs), info_keywords=("best_progress", "from_bottom", "rewinds")))
