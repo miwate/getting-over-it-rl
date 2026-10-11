@@ -11,7 +11,8 @@ from .client import OBS_FIELDS, GoiClient, start
 # Mouse input at action 1. The game's acceleration curve makes small inputs fine (below ~3: under 0.15 units of cursor
 # travel per step) and large ones flicks (12: the whole 3.5 reach in one step).
 MOUSE = 12.0
-PROGRESS, LAKE, WON, POT_CONTACT = (OBS_FIELDS.index(f) for f in ("progress", "fell_in_lake", "won", "pot_contact"))
+PROGRESS, LAKE, WON, POT_CONTACT, HEAD_CONTACT = (OBS_FIELDS.index(f) for f in ("progress", "fell_in_lake", "won",
+                                                                                "pot_contact", "head_contact"))
 PREV_ACTIONS = 4  # as Linesight gives its Trackmania policy its last 5 actions
 SPEED_REF = 0.2  # progress per step (6 units/s, the agent's "very fast" regime) worth one unit of speed bonus
 
@@ -58,7 +59,7 @@ class GoiEnv(gym.Env):
     def __init__(self, game_dir=None, port=None, k=4, n_rays=32, ray_length=15.0, time_penalty=0.001, stall_steps=None,
                  stall_ends=True, snake_ends=False, action_cost=0.0, mouse=MOUSE, recovery=0.0, regress=0.0, air_bonus=0.0, speed_bonus=0.0,
                  render_mode=None, realtime=True, width=640, height=360, game_args=(), head_rays=0, head_length=4.0,
-                 record_reset=None):
+                 record_reset=None, held_records=False):
         """Launches the game from game_dir on a free port, or with game_dir=None connects to one already running on
         `port` (default 5555).
 
@@ -72,6 +73,9 @@ class GoiEnv(gym.Env):
         action_cost: subtracted from the reward times the mean squared action, so big mouse moves have to pay off.
         mouse: mouse input at action 1.
         recovery, regress, air_bonus, speed_bonus: progress_reward's weights.
+        held_records: new ground pays only while the pot or the hammer touches something, so a mid-air peak pays
+        nothing unless the climber lands or hooks there: flinging for height and falling earned up to 8 below the
+        chapel, where players climb "slow but sure".
         """
         self.render_mode = render_mode
         self.metadata = {**self.metadata, "render_fps": 120 / k}
@@ -83,6 +87,7 @@ class GoiEnv(gym.Env):
         self.action_cost = action_cost
         self.mouse = mouse
         self.weights = dict(recovery=recovery, regress=regress, air_bonus=air_bonus, speed_bonus=speed_bonus)
+        self.held_records = held_records
         self._config = config = dict(k=k, n_rays=n_rays, ray_length=ray_length, render=render_mode is not None,
                                      width=width, height=height, head_rays=head_rays, head_length=head_length)
         if game_dir:
@@ -91,7 +96,7 @@ class GoiEnv(gym.Env):
             self._proc, self.client = None, GoiClient(port=port or 5555, **config)
         self.observation_space = spaces.Box(-np.inf, np.inf, (self.client.obs_size + 2 * PREV_ACTIONS + 2,), np.float32)
         self.action_space = spaces.Box(-1.0, 1.0, (2,), np.float32)
-        self.best_progress = 0.0
+        self.best_progress = self.held_best = 0.0  # the record, and the record made while touching something
         self._saved_best = {}
 
     def reset(self, *, seed=None, options=None):
@@ -101,7 +106,7 @@ class GoiEnv(gym.Env):
             raw = self._place(options["place"], options.get("dx", 0.0))
         else:
             raw = self.client.reset() if options.get("state") is None else self.client.load_state(options["state"])
-        self.best_progress = self._stall_mark = self._progress = raw[PROGRESS]
+        self.best_progress = self.held_best = self._stall_mark = self._progress = raw[PROGRESS]
         self.stalled = 0
         self._actions = deque([(0.0, 0.0)] * PREV_ACTIONS, maxlen=PREV_ACTIONS)
         return self._observe(raw), {"best_progress": self.best_progress}
@@ -110,12 +115,18 @@ class GoiEnv(gym.Env):
         a = np.clip(action, -1.0, 1.0)
         self._actions.appendleft(tuple(a))
         raw = self.client.step(*(a * self.mouse))
-        reward = (progress_reward(self._progress, raw[PROGRESS], self.best_progress, 1.0 - raw[POT_CONTACT], **self.weights)
+        best = self.best_progress
+        if self.held_records:  # in the air nothing is new; touching down pays for the ground gained since the last hold
+            held = raw[POT_CONTACT] or raw[HEAD_CONTACT]
+            best = self.held_best if held else max(self.held_best, raw[PROGRESS])
+            if held:
+                self.held_best = max(self.held_best, raw[PROGRESS])
+        reward = (progress_reward(self._progress, raw[PROGRESS], best, 1.0 - raw[POT_CONTACT], **self.weights)
                   - self.time_penalty - self.action_cost * float(np.mean(a * a)))
         self._progress = raw[PROGRESS]
         self.best_progress = max(self.best_progress, raw[PROGRESS])
         if self.record_reset is not None and self.best_progress - raw[PROGRESS] > self.record_reset:
-            self.best_progress = raw[PROGRESS]
+            self.best_progress = self.held_best = raw[PROGRESS]
         self.stalled += 1
         self._stall_mark = min(self._stall_mark, raw[PROGRESS])
         if raw[PROGRESS] >= self._stall_mark + 1.0:
@@ -160,7 +171,7 @@ class GoiEnv(gym.Env):
 
     def load_state(self, state_id):
         raw = self.client.load_state(state_id)
-        self.best_progress = self._saved_best.get(state_id, raw[PROGRESS])
+        self.best_progress = self.held_best = self._saved_best.get(state_id, raw[PROGRESS])
         self._progress = self._stall_mark = raw[PROGRESS]
         self.stalled = 0  # a fresh try: the stuck signal mustn't carry over from whatever ran before
         self._actions = deque([(0.0, 0.0)] * PREV_ACTIONS, maxlen=PREV_ACTIONS)
@@ -210,3 +221,30 @@ if __name__ == "__main__":  # python -m goi_env.env: progress_reward's guarantee
         # bonuses only multiply new ground
         assert progress_reward(prev, min(now, best), best, 1.0, air_bonus=5, speed_bonus=5) == 0
     print("progress_reward: ok")
+
+    class Steps:  # a stand-in game: each step returns the next (progress, pot contact, hammer contact)
+        on_snake, obs_size = False, len(OBS_FIELDS)
+
+        def __init__(self, moves):
+            self.moves = iter(moves)
+
+        def step(self, dx, dy):
+            raw = np.zeros(len(OBS_FIELDS), np.float32)
+            raw[PROGRESS], raw[POT_CONTACT], raw[HEAD_CONTACT] = next(self.moves)
+            return raw
+
+    def rewards(moves, held):
+        env = GoiEnv.__new__(GoiEnv)
+        env.__dict__.update(time_penalty=0.0, stall_steps=None, stall_ends=True, snake_ends=False, record_reset=None,
+                            action_cost=0.0, mouse=MOUSE, weights=dict(recovery=0, regress=0, air_bonus=0,
+                                                                         speed_bonus=0),
+                            held_records=held, _realtime=False, client=Steps(moves), best_progress=428.0,
+                            held_best=428.0, _progress=428.0, _stall_mark=428.0, stalled=0,
+                            _actions=deque([(0.0, 0.0)] * PREV_ACTIONS, maxlen=PREV_ACTIONS))
+        return [env.step(np.zeros(2))[1] for _ in moves]
+
+    fling = [(431, 0, 0), (438, 0, 0), (433, 0, 0), (426, 1, 0)]  # up to 438 in the air, then down on a rock
+    hook = [(434, 0, 0), (443, 0, 1), (446, 1, 0)]  # in the air, the hammer catches the ledge at 443, the pot lands
+    assert sum(rewards(fling, False)) == 10 and sum(rewards(fling, True)) == 0
+    assert rewards(hook, True) == [0, 15, 3] and sum(rewards(hook, False)) == 18
+    print("held records: ok")
