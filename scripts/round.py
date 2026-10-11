@@ -6,6 +6,7 @@ stretch is trained twice because a run of this recipe either learns the stretch 
 4%, 0%, 0%). Log: runs/rounds.txt.
 
     python scripts/round.py chapel 415 465
+    python scripts/round.py reclimb-garden 250 290 --after 300   (re-climbs: where games were after falling from 300+)
 """
 import argparse
 import glob
@@ -61,6 +62,8 @@ def main():
     ap.add_argument("--steps", type=int, default=10_000_000, help="steps per run")
     ap.add_argument("--marathons", type=int, default=1, help="exported states from this many latest marathons")
     ap.add_argument("--seeds", nargs="*", default=[], help="more exported starts, e.g. seeds.py's for a hard move")
+    ap.add_argument("--after", type=float, help="re-climbs: train and test from the states saved in the stretch after "
+                                                 "a game had been at this progress (it fell back into the stretch)")
     ap.add_argument("--extra", nargs=argparse.REMAINDER, default=[], help="more train.py arguments (e.g. --regress 1)")
     args = ap.parse_args()
     if not os.environ.get("GOI_GAME_DIR"):
@@ -74,12 +77,13 @@ def main():
         marathon(n, chain)
     states = sorted(f for k in range(n - args.marathons + 1, n + 1) for f in glob.glob(f"runs/marathon/m{k}-*-states.npz"))
     lo, hi = args.lo, args.hi
+    after = lambda flag: [] if args.after is None else [flag, str(args.after)]  # noqa: E731
     current = [spec for start, spec in chain if start <= lo][-1]
     log(f"== round {args.name} {lo:.0f}-{hi:.0f}: states from m{n}; current {current}")
     common = ["--collector", "async", "--gsde", "--bounded-mean", "--envs", "10", "--demo-share", "0.6",
               "--saved-starts", "0.2", "--traps", "0.2", "--rewinds", "1.0", "--episode-steps", "1800",
               "--save-every", "2000000", "--demos", *states, *args.seeds, PATH_STATES, "--demo-window", str(lo), str(hi),
-              "--window", str(lo - 6), str(hi + 5), *args.extra]
+              "--window", str(lo - 6), str(hi + 5), *after("--demo-after"), *args.extra]
     runs = [f"{args.name}-m{n}-{chr(ord('a') + k)}" for k in range(args.runs)]
     for run in runs:
         ckpt = last_checkpoint(run)
@@ -95,7 +99,8 @@ def main():
             subprocess.run([PY, "scripts/train.py", "--name", run, *start, *common], stdout=f, stderr=subprocess.STDOUT)
     candidates = [f"{last_checkpoint(r)}@{noise}".replace("\\", "/") for r in runs for noise in (1, 0.5)] + [current]
     test = subprocess.run([PY, "scripts/arrival_test.py", str(lo), str(hi), str(args.seconds), *candidates,
-                           "--states", *states, "--path", PATH_STATES], capture_output=True, text=True).stdout
+                           "--states", *states, "--path", PATH_STATES, *after("--after")], capture_output=True,
+                          text=True).stdout
     scores = {}
     for line in test.splitlines():
         m = re.match(r"\s+(\d+)/(\d+) gain\s+(-?[\d.]+) (\S+)", line)

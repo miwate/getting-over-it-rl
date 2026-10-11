@@ -20,13 +20,18 @@ PROGRESS = OBS_FIELDS.index("progress")
 ARRIVAL = 0  # marathon.py's kind of a state saved where a game first reached a section
 
 
-def arrivals(files, at, goal):
+def arrivals(files, at, goal, after=None):
     """(file, index) of each game's state where it first reached `at` (an arrival export at a section start), else its
-    first state in [at, goal)."""
+    first state in [at, goal). With `after`: all its states in [at, goal) saved after it had been at that progress
+    (climbing back after a fall from above)."""
     out = []
     for f in files:
         z = np.load(f)
         p, kind = z["progress"], z["kind"]
+        if after is not None:
+            first = min(z["step"][p >= after], default=np.inf)
+            out += [(f, i) for i in range(len(p)) if at <= p[i] < goal and z["step"][i] > first]
+            continue
         first = [i for i in range(len(p)) if kind[i] == ARRIVAL and at <= p[i] < at + 3] or \
             [i for i in range(len(p)) if at <= p[i] < goal]
         if first:
@@ -80,13 +85,17 @@ def main():
     ap.add_argument("--path", default=os.path.join("runs", "climbs", "win-e4-states.npz"),
                     help="with no exported state at the stretch: start where this path reaches it (its exported "
                          "states, path_states.py, or the path itself, replayed)")
+    ap.add_argument("--after", type=float, help="test re-climbs: from the states saved in the stretch after a game "
+                                                 "had been at this progress (at most --most of them, spread out)")
+    ap.add_argument("--most", type=int, default=24)
     ap.add_argument("--tries", type=int, default=10)
     ap.add_argument("--games", type=int, default=8, help="games at once (one per state; ~2.3 GB of RAM each)")
     ap.add_argument("--game-dir", default=os.environ.get("GOI_GAME_DIR"), help="install folder (or set GOI_GAME_DIR)")
     args = ap.parse_args()
     if not args.game_dir:
         ap.error("pass --game-dir or set GOI_GAME_DIR")
-    states = arrivals(sorted(f for pattern in args.states for f in glob.glob(pattern)), args.at, args.goal)
+    states = arrivals(sorted(f for pattern in args.states for f in glob.glob(pattern)), args.at, args.goal, args.after)
+    states = [states[int(k)] for k in np.linspace(0, len(states) - 1, min(len(states), args.most))] if states else []
     if not states:  # no marathon game got here yet: the path's state, tried 4 times as often
         print(f"no exported state at {args.at:.0f}-{args.goal:.0f}: from {args.path}")
         exported = "exported" in np.load(args.path).files  # path_states.py's: loaded, not replayed
@@ -94,7 +103,8 @@ def main():
         args.tries *= 4
     with ProcessPoolExecutor(min(len(states), args.games)) as ex:
         res = list(ex.map(run, states, repeat(args), repeat(args.candidates)))
-    print(f"reach {args.goal:.0f} within {args.seconds:.0f} s from {len(states)} marathon arrivals at {args.at:.0f} "
+    what = "arrivals" if args.after is None else f"states (after {args.after:.0f})"
+    print(f"reach {args.goal:.0f} within {args.seconds:.0f} s from {len(states)} marathon {what} at {args.at:.0f} "
           f"({args.tries} tries each):")
     for c, spec in enumerate(args.candidates):
         wins = sum(r[c][0] for r in res)
