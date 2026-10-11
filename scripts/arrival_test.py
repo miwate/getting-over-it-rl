@@ -81,6 +81,7 @@ def main():
                     help="with no exported state at the stretch: start where this path reaches it (its exported "
                          "states, path_states.py, or the path itself, replayed)")
     ap.add_argument("--tries", type=int, default=10)
+    ap.add_argument("--games", type=int, default=8, help="games at once (one per state; ~2.3 GB of RAM each)")
     ap.add_argument("--game-dir", default=os.environ.get("GOI_GAME_DIR"), help="install folder (or set GOI_GAME_DIR)")
     args = ap.parse_args()
     if not args.game_dir:
@@ -91,7 +92,7 @@ def main():
         exported = "exported" in np.load(args.path).files  # path_states.py's: loaded, not replayed
         states = arrivals([args.path], args.at, args.goal) if exported else [(args.path, None)]
         args.tries *= 4
-    with ProcessPoolExecutor(len(states)) as ex:
+    with ProcessPoolExecutor(min(len(states), args.games)) as ex:
         res = list(ex.map(run, states, repeat(args), repeat(args.candidates)))
     print(f"reach {args.goal:.0f} within {args.seconds:.0f} s from {len(states)} marathon arrivals at {args.at:.0f} "
           f"({args.tries} tries each):")
