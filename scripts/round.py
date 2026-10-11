@@ -110,7 +110,8 @@ def main():
         log(f"   {wins:3d} gain {gain:5.1f} {spec}")
     best = max(scores, key=scores.get) if scores else current
     if best != current and scores[best] > scores.get(current, (-1, 0.0)):
-        chain = sorted([c for c in chain if c[0] != lo] + [[lo, best]], key=lambda c: c[0])
+        # the stretch's network owns all of it: entries inside it go (a 430 entry would take over mid-jump)
+        chain = sorted([c for c in chain if not lo <= c[0] < hi] + [[lo, best]], key=lambda c: c[0])
         json.dump(chain, open("runs/chain.json", "w"), indent=2)
         log(f"   chain: {lo:.0f} -> {best}")
     else:
