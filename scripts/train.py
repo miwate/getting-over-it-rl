@@ -40,7 +40,9 @@ class Starts(gym.Wrapper):
     the record ends the episode, and the next one starts from a state saved 1-2 s before the fall began, so the agent
     retries that move instead of spending the time climbing back; at most max_retries in a row. The other episodes
     play on after falls, so recovering still gets practice. The cut is a truncation: the fall's cost is learned from
-    the value of where the pot ended up, not as a death.
+    the value of where the pot ended up, not as a death. But with every episode rewound, no episode plays on after a
+    fall, so the critic never learns that value: below the chapel jump its value where a fall began was within 0-25%
+    of its value before the try (falls looked free). With `falls_terminal` the cut ends the episode as a death.
 
     Traps: a state where an episode has made no headway for trap_after steps is saved into a pool (the last `pool`
     kept), and a share of episodes start from one, so the agent practices exactly where it gets stuck. Random mouse
@@ -66,13 +68,20 @@ class Starts(gym.Wrapper):
     half from anywhere in it; 5 more each time 30% of the last 20 frontier-started episodes reached the end. Uniform
     starts over a whole section gave no reward signal in most sections; judging all starts moved the frontier back
     before the hard states were learned (chapel: 40 states back in training, 0/10 from 8 s before the end).
+    With `demo_priority` (reverse curriculum by success rate: Florensa et al. 2017, Salimans & Chen 2018, prioritized
+    replay of levels, Jiang et al. 2021): each demo state's tries and successes (reaching the window's end) are counted,
+    decayed by 0.9 a try, and starts are drawn with weight p(1 - p) + 0.01, p = (successes + 1) / (tries + 2): practice
+    goes where the outcome is still open, which moves back along every path as the agent learns. Below the chapel jump
+    the networks finished from 1 s before the end 84-88% of the time, from 2 s 14-22%, from 3 s 3-4%.
 
     Infos carry from_bottom and rewinds (1 or 0). Bottom starts without rewinds play the real game.
     """
 
     def __init__(self, env, saved_share=0.5, rewind_share=0.5, bin_size=2.0, fall=5.0, every=30, max_retries=3,
-                 trap_share=0.0, trap_after=150, pool=30, refresh=0.0, frontier=0.0, window=None, place=None, place_at=(), demos=None, demo_share=0.0, demo_back=300, demo_window=None, demo_curriculum=False, demo_after=None):
+                 trap_share=0.0, trap_after=150, pool=30, refresh=0.0, frontier=0.0, window=None, place=None, place_at=(), demos=None, demo_share=0.0, demo_back=300, demo_window=None, demo_curriculum=False, demo_after=None, demo_priority=False, falls_terminal=False):
         super().__init__(env)
+        self.demo_priority, self.tries, self.demo_sid, self.tried = demo_priority, {}, None, 0  # tries: id -> (n, wins)
+        self.falls_terminal = falls_terminal
         self.demo_window, self.demo_after = demo_window, demo_after
         self.curriculum, self.back_k, self.outcomes, self.start = demo_curriculum, 10, [], None
         self.demo_path, self.demo_share, self.demo_back, self.demos = demos, demo_share, demo_back, []  # demo state ids
@@ -106,6 +115,16 @@ class Starts(gym.Wrapper):
                     self.back_k = min(self.back_k + 5, len(self.demos))
                     print(f"curriculum: starts from the last {self.back_k} of {len(self.demos)} path states", flush=True)
                 self.outcomes = []
+        if self.demo_priority and self.start == "demo":  # how the last episode from a demo start went
+            n, wins = self.tries.get(self.demo_sid, (0.0, 0.0))
+            self.tries[self.demo_sid] = (0.9 * n + 1, 0.9 * wins + (game.best_progress >= self.demo_window[1]))
+            self.tried += 1
+            if self.tried % 1000 == 0:
+                stats = np.array([self.tries.get(d, (0.0, 0.0)) for d in self.demos])
+                seen = stats[:, 0] > 0
+                p = (stats[seen, 1] + 1) / (stats[seen, 0] + 2)
+                print(f"demo starts: {seen.sum()} of {len(self.demos)} tried; success {p.mean():.2f} on average, "
+                      f"{np.mean((p > 0.1) & (p < 0.9)):.0%} of them between 0.1 and 0.9", flush=True)
         options = dict(options or {})
         for state, _ in self.recent:
             game.drop_state(state)
@@ -129,7 +148,13 @@ class Starts(gym.Wrapper):
                 frontier = self.curriculum and self.rng.random() < 0.5
                 if frontier:
                     pool = pool[:5]
-                options["state"] = pool[self.rng.integers(len(pool))]
+                if self.demo_priority:
+                    stats = np.array([self.tries.get(d, (0.0, 0.0)) for d in pool])
+                    p = (stats[:, 1] + 1) / (stats[:, 0] + 2)
+                    weights = p * (1 - p) + 0.01
+                    options["state"] = self.demo_sid = pool[self.rng.choice(len(pool), p=weights / weights.sum())]
+                else:
+                    options["state"] = pool[self.rng.integers(len(pool))]
                 self.start = "frontier" if frontier else "demo"
             elif bins and r < self.trap_share + self.demo_share + self.saved_share:
                 weights = np.array([1 / np.sqrt(1 + self.bins[b][1]) for b in bins])
@@ -220,7 +245,10 @@ class Starts(gym.Wrapper):
                 if before and self.retries < self.max_retries:
                     self.retry = before[-2] if len(before) > 1 else before[-1]
                     self.recent = [r for r in self.recent if r[0] != self.retry]
-                truncated = True
+                if self.falls_terminal:
+                    terminated = True
+                else:
+                    truncated = True
             elif self.t % self.every == 0:
                 self.recent.append((game.save_state(), float(obs[GAP])))
                 if len(self.recent) > 4:
@@ -254,13 +282,14 @@ def demo_steps(game, z, j):
 
 def make_env(game_dir, k, episode_steps, stall_steps, saved_starts, rewinds, traps=0.0, refresh=0.0, frontier=0.0,
              window=None, place=None, place_at=(), demos=None, demo_share=0.0, demo_back=300, demo_window=None,
-             demo_curriculum=False, demo_after=None, **env_kwargs):
+             demo_curriculum=False, demo_after=None, demo_priority=False, falls_terminal=False, **env_kwargs):
     """env_kwargs: GoiEnv's action_cost, mouse and reward weights."""
     env = Starts(GoiEnv(game_dir, k=k, stall_steps=stall_steps, snake_ends=True, **env_kwargs), saved_starts, rewinds,
                  trap_share=traps,
                  trap_after=(stall_steps or 300) // 2, refresh=refresh, frontier=frontier, window=window, place=place,
                  place_at=place_at, demos=demos, demo_share=demo_share, demo_back=demo_back, demo_window=demo_window,
-                 demo_curriculum=demo_curriculum, demo_after=demo_after)
+                 demo_curriculum=demo_curriculum, demo_after=demo_after, demo_priority=demo_priority,
+                 falls_terminal=falls_terminal)
     return TimeLimit(env, episode_steps)
 
 
@@ -300,12 +329,24 @@ class Player:
         return act(self.model, self.norm.normalize_obs(obs[None]), step, self.noise)[0]
 
 
-def chain(base, then=(), noise=0.5):
+def chain(base, then=(), noise=0.5, margin=2.0):
     """A player made of checkpoints that take over by route progress: base, then each (from, checkpoint) from that
-    progress on. A specialist for a stretch hands back to the earlier player below it, e.g. after a fall."""
+    progress on. A specialist for a stretch hands back to the earlier player below it, e.g. after a fall. A handover
+    waits until progress is `margin` past the boundary, so progress wavering around one (standing there, or mid-air in
+    a jump: 430 is) doesn't swap players back and forth; at step 0 the player is picked by progress alone."""
     players = [(-np.inf, Player(base, noise))] + sorted(((t[0], Player(t[1], t[2] if len(t) > 2 else noise))
                                                          for t in then), key=lambda t: t[0])
-    return lambda obs, step: [p for f, p in players if obs[PROGRESS] >= f][-1](obs, step)
+    current = [0]
+
+    def play(obs, step):
+        p = obs[PROGRESS]
+        if step == 0:
+            current[0] = max(i for i, (f, _) in enumerate(players) if p >= f)
+        up = max(i for i, (f, _) in enumerate(players) if p >= f + margin)  # boundaries left behind by `margin`
+        down = max(i for i, (f, _) in enumerate(players) if p >= f - margin)
+        current[0] = min(max(current[0], up), down)
+        return players[current[0]][1](obs, step)
+    return play
 
 
 def parse_then(specs):
@@ -426,6 +467,12 @@ def main():
                     help="with --demo-window: only the demos' states in the window after they have been at this progress")
     ap.add_argument("--demo-curriculum", action="store_true",
                     help="with --demo-window: start near the stretch's end first, moving back as episodes succeed")
+    ap.add_argument("--demo-priority", action="store_true",
+                    help="with --demo-window: favor demo starts the agent crosses from only sometimes (weight p(1-p))")
+    ap.add_argument("--falls-terminal", action="store_true",
+                    help="with --rewinds: a fall's cut ends the episode as a death, not a truncation the critic fills in")
+    ap.add_argument("--held-records", action="store_true",
+                    help="new ground pays only while the pot or hammer touches something, not at mid-air peaks")
     ap.add_argument("--place-at", nargs="+", default=[], metavar="ALONG:DX",
                     help="also seed placed starts at these route distances, moved sideways by DX (e.g. 226:1.2)")
     # Defaults: abl-oldhp's settings, the best of the 2M-step experiments (docs/RECON.md, "Settings experiments").
@@ -472,11 +519,12 @@ def main():
     checkpoints = os.path.join(run_dir, "checkpoints")
     stall_steps = int(args.stall_seconds * 120 / args.k) or None
     env_kwargs = dict(head_rays=args.head_rays, action_cost=args.action_cost, mouse=args.mouse, recovery=args.recovery, regress=args.regress,
-                      air_bonus=args.air_bonus, speed_bonus=args.speed_bonus)
+                      air_bonus=args.air_bonus, speed_bonus=args.speed_bonus, held_records=args.held_records)
     envs = [partial(make_env, args.game_dir, args.k, args.episode_steps, stall_steps, args.saved_starts,
                     args.rewinds, args.traps, args.refresh, args.frontier, args.window, args.place,
                     [tuple(map(float, spot.split(":"))) for spot in args.place_at], args.demos, args.demo_share,
-                    int(args.demo_back * 120 / args.k), args.demo_window, args.demo_curriculum, args.demo_after, **env_kwargs)] * args.envs
+                    int(args.demo_back * 120 / args.k), args.demo_window, args.demo_curriculum, args.demo_after,
+                    demo_priority=args.demo_priority, falls_terminal=args.falls_terminal, **env_kwargs)] * args.envs
     collector = Collector(envs) if args.collector == "async" else None
     venv = (Spaces(args.envs, collector.observation_space, collector.action_space) if collector else
             VecMonitor(SubprocVecEnv(envs), info_keywords=("best_progress", "from_bottom", "rewinds")))
