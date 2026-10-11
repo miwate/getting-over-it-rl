@@ -26,6 +26,7 @@ def main():
     ap.add_argument("--after", type=float, default=10, help="seconds filmed after reaching it")
     ap.add_argument("--minutes", type=float, default=30, help="game time each try may take")
     ap.add_argument("--seeds", type=int, default=10, help="tries (seeds 0, 1, ...)")
+    ap.add_argument("--first-seed", type=int, default=0, help="seeds from this one (several processes try at once)")
     ap.add_argument("--out", required=True)
     ap.add_argument("--title", default="Networks alone, real game, real time")
     ap.add_argument("--crf", type=int, default=16, help="x264 quality: lower is better and bigger (16: ~4 MB/s)")
@@ -37,7 +38,7 @@ def main():
     links = json.load(open(args.chain))
     base, _, noise = links[0][1].partition("@")
     then = [(start, spec.partition("@")[0], float(spec.partition("@")[2] or 0.5)) for start, spec in links[1:]]
-    for seed in range(args.seeds):
+    for seed in range(args.first_seed, args.first_seed + args.seeds):
         torch.manual_seed(seed)
         player = make_chain(base, then, float(noise or 0.5))
         game = GoiEnv(args.game_dir, stall_steps=int(STALL_SECONDS * 30), stall_ends=False, record_reset=5)
