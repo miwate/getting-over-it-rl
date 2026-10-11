@@ -7,6 +7,7 @@ stretch is trained twice because a run of this recipe either learns the stretch 
 
     python scripts/round.py chapel 415 465
     python scripts/round.py reclimb-garden 250 290 --after 300   (re-climbs: where games were after falling from 300+)
+    python scripts/round.py roofs 465 525 --regional 455 465   (above the frontier: games started just below the roofs)
 """
 import argparse
 import glob
@@ -38,18 +39,18 @@ def steps_of(path):
 
 
 def latest_marathon():
-    found = [int(m) for m in re.findall(r"m(\d+)\.txt", " ".join(os.listdir("runs/marathon")))]
+    found = [int(m.group(1)) for f in os.listdir("runs/marathon") if (m := re.fullmatch(r"m(\d+)\.txt", f))]
     return max(found) if found else 0
 
 
-def marathon(n, chain):
-    """Marathon n with the chain (8 games x 60 min); returns its per-game summary lines."""
+def marathon(name, chain, extra=("--minutes", "60")):
+    """A marathon with the chain, 8 games (runs/marathon/<name>*), logging each game's best."""
     then = [f"{start}:{spec}" for start, spec in chain[1:]]
-    with open(f"runs/marathon/m{n}.txt", "w") as f:
-        subprocess.run([PY, "scripts/marathon.py", chain[0][1].partition("@")[0], "--then", *then, "--minutes", "60",
-                        "--games", "8", "--out", f"runs/marathon/m{n}"], stdout=f, stderr=subprocess.DEVNULL)
-    lines = open(f"runs/marathon/m{n}.txt").read().splitlines()
-    log(f"   marathon m{n}: " + "; ".join(l.split(" in ")[0] for l in lines if l.startswith("game")))
+    with open(f"runs/marathon/{name}.txt", "w") as f:
+        subprocess.run([PY, "scripts/marathon.py", chain[0][1].partition("@")[0], "--then", *then, *extra,
+                        "--games", "8", "--out", f"runs/marathon/{name}"], stdout=f, stderr=subprocess.DEVNULL)
+    lines = open(f"runs/marathon/{name}.txt").read().splitlines()
+    log(f"   marathon {name}: " + "; ".join(l.split(" in ")[0] for l in lines if l.startswith("game")))
 
 
 def main():
@@ -62,6 +63,9 @@ def main():
     ap.add_argument("--steps", type=int, default=10_000_000, help="steps per run")
     ap.add_argument("--marathons", type=int, default=1, help="exported states from this many latest marathons")
     ap.add_argument("--seeds", nargs="*", default=[], help="more exported starts, e.g. seeds.py's for a hard move")
+    ap.add_argument("--regional", type=float, nargs=2, metavar=("LO", "HI"),
+                    help="first a regional marathon (once per round name): chain games started from the winning path's "
+                         "and the marathons' states at this stretch, below the round's: the chain's own arrivals there")
     ap.add_argument("--after", type=float, help="re-climbs: train and test from the states saved in the stretch after "
                                                  "a game had been at this progress (it fell back into the stretch)")
     ap.add_argument("--extra", nargs=argparse.REMAINDER, default=[], help="more train.py arguments (e.g. --regress 1)")
@@ -74,8 +78,15 @@ def main():
     if not glob.glob(f"runs/marathon/m{n}-*-states.npz"):
         n += 1
         log(f"== marathon m{n} for exported states")
-        marathon(n, chain)
+        marathon(f"m{n}", chain)
     states = sorted(f for k in range(n - args.marathons + 1, n + 1) for f in glob.glob(f"runs/marathon/m{k}-*-states.npz"))
+    if args.regional:
+        name = f"r-{args.name}"
+        if not glob.glob(f"runs/marathon/{name}-*-states.npz"):
+            log(f"== regional marathon {name}: from {args.regional[0]:.0f}-{args.regional[1]:.0f}")
+            marathon(name, chain, ["--minutes", "30", "--start-states", PATH_STATES, *states, "--region",
+                                   *map(str, args.regional)])
+        states += sorted(glob.glob(f"runs/marathon/{name}-*-states.npz"))
     lo, hi = args.lo, args.hi
     after = lambda flag: [] if args.after is None else [flag, str(args.after)]  # noqa: E731
     current = [spec for start, spec in chain if start <= lo][-1]
@@ -116,7 +127,7 @@ def main():
         log(f"   chain: {lo:.0f} -> {best}")
     else:
         log("   chain unchanged")
-    marathon(n + 1, chain)
+    marathon(f"m{n + 1}", chain)
     log(f"== round {args.name} done")
 
 
