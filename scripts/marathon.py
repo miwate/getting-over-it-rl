@@ -6,9 +6,14 @@ plays (<out>-<seed>-states.npz: where it first reached each section start and ea
 every minute), which any game can load (train.py --demos, arrival_test.py): replaying a long game in another launch
 drifts.
 
+Regional (--start-states, --region): each game starts from a state in those files at that stretch of progress instead
+of the bottom (e.g. the winning path's states just below the roofs), and starts over from another one when it falls
+--drop below the stretch: the chain's own arrivals at upper sections, before games from the bottom get there.
+
     python scripts/marathon.py runs/rw-port/checkpoints/ppo_1500160_steps.zip --then 224:runs/bar-sil/checkpoints/ppo_7_steps.zip 250:runs/garden-path/checkpoints/ppo_10000000_steps.zip --minutes 60 --out runs/marathon/a
 """
 import argparse
+import glob
 import os
 from concurrent.futures import ProcessPoolExecutor
 from itertools import repeat
@@ -37,8 +42,21 @@ def play(seed, args):
     # The agent's own record and stall count as in training episodes (GoiEnv record_reset; the stall count re-arms).
     game = GoiEnv(args.game_dir, stall_steps=int(STALL_SECONDS * 30), stall_ends=False, record_reset=args.record_reset)
     actions, trace, states = [], [], []  # states: (progress, step, kind, exported bytes)
-    todo = sorted(set(start for start, _ in SECTIONS[1:]) | set(range(MARK, int(SECTIONS[-1][0]) + 1, MARK)))
+    marks = sorted(set(start for start, _ in SECTIONS[1:]) | set(range(MARK, int(SECTIONS[-1][0]) + 1, MARK)))
+    pool = [(f, i) for f in sorted(f for pattern in args.start_states for f in glob.glob(pattern))
+            for i, p in enumerate(np.load(f)["progress"]) if args.region[0] <= p < args.region[1]]
+    rng = np.random.default_rng(seed)
     obs = None
+
+    def start():  # a fresh start: the bottom, or (regional) a state at the stretch
+        if not pool:
+            return game.reset()[0]
+        f, i = pool[rng.integers(len(pool))]
+        sid = game.import_state(np.load(f)[f"s{i}"].tobytes())
+        try:
+            return game.load_state(sid)
+        finally:
+            game.drop_state(sid)
 
     def export(kind):
         sid = game.save_state()
@@ -46,9 +64,14 @@ def play(seed, args):
         game.drop_state(sid)
 
     try:
-        obs, _ = game.reset()
+        obs, t = start(), 0
+        todo = [m for m in marks if m > obs[PROGRESS]]
         for step in range(int(args.minutes * 60 * 30)):
-            a = np.asarray(player(obs, step), np.float32)
+            if pool and obs[PROGRESS] < args.region[0] - args.drop:  # fell below the stretch: start over there
+                obs, t = start(), 0
+                todo = [m for m in marks if m > obs[PROGRESS]]
+            a = np.asarray(player(obs, t), np.float32)
+            t += 1
             obs, *_ = game.step(a)
             actions.append(a)
             trace.append(obs[PROGRESS])
@@ -98,6 +121,10 @@ def main():
     ap.add_argument("--games", type=int, default=8)
     ap.add_argument("--record-reset", type=float, default=5,
                     help="the agent's record restarts after a fall of more than this (training's rewind threshold)")
+    ap.add_argument("--start-states", nargs="*", default=[], help="regional: exported state files (globs) to start from")
+    ap.add_argument("--region", type=float, nargs=2, default=(-np.inf, np.inf), metavar=("LO", "HI"),
+                    help="regional: start from the states at this stretch of progress")
+    ap.add_argument("--drop", type=float, default=20, help="regional: start over after falling this far below LO")
     ap.add_argument("--out", required=True, help="path prefix for each game's .npz")
     ap.add_argument("--game-dir", default=os.environ.get("GOI_GAME_DIR"), help="install folder (or set GOI_GAME_DIR)")
     args = ap.parse_args()
