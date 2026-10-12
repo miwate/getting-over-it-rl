@@ -68,6 +68,9 @@ def main():
                          "and the marathons' states at this stretch, below the round's: the chain's own arrivals there")
     ap.add_argument("--after", type=float, help="re-climbs: train and test from the states saved in the stretch after "
                                                  "a game had been at this progress (it fell back into the stretch)")
+    ap.add_argument("--from", dest="sources", nargs="+", help="warm-start the runs from these checkpoints in turn "
+                                                                "(default: the chain's network at the stretch's start)")
+    ap.add_argument("--tries", type=int, default=10, help="arrival test: tries per state")
     ap.add_argument("--extra", nargs=argparse.REMAINDER, default=[], help="more train.py arguments (e.g. --regress 1)")
     args = ap.parse_args()
     if not os.environ.get("GOI_GAME_DIR"):
@@ -96,7 +99,8 @@ def main():
               "--save-every", "2000000", "--demos", *states, *args.seeds, PATH_STATES, "--demo-window", str(lo), str(hi),
               "--window", str(lo - 6), str(hi + 5), *after("--demo-after"), *args.extra]
     runs = [f"{args.name}-m{n}-{chr(ord('a') + k)}" for k in range(args.runs)]
-    for run in runs:
+    for k, run in enumerate(runs):
+        source = args.sources[k % len(args.sources)] if args.sources else current.partition("@")[0]
         ckpt = last_checkpoint(run)
         if ckpt and steps_of(ckpt) >= args.steps:
             continue
@@ -105,12 +109,13 @@ def main():
                 log(f"   {run} resumed at {steps_of(ckpt)}")
                 start = ["--resume", ckpt, "--steps", str(args.steps - steps_of(ckpt))]
             else:
-                log(f"   {run} from {current.partition('@')[0]}")
-                start = ["--warm-start", current.partition("@")[0], "--steps", str(args.steps)]
+                log(f"   {run} from {source}")
+                start = ["--warm-start", source, "--steps", str(args.steps)]
             subprocess.run([PY, "scripts/train.py", "--name", run, *start, *common], stdout=f, stderr=subprocess.STDOUT)
     candidates = [f"{last_checkpoint(r)}@{noise}".replace("\\", "/") for r in runs for noise in (1, 0.5)] + [current]
     test = subprocess.run([PY, "scripts/arrival_test.py", str(lo), str(hi), str(args.seconds), *candidates,
-                           "--states", *states, "--path", PATH_STATES, *after("--after")], capture_output=True,
+                           "--states", *states, "--path", PATH_STATES, "--tries", str(args.tries), *after("--after")],
+                          capture_output=True,
                           text=True).stdout
     scores = {}
     for line in test.splitlines():
