@@ -3,6 +3,7 @@
 Smoke test (stdlib only; launches the game, exercises every command, then quits it):
     python -m goi_env.client --game-dir "C:/.../steamapps/common/Getting Over It"
 """
+import ctypes
 import msvcrt
 import os
 import socket
@@ -11,6 +12,7 @@ import subprocess
 import tempfile
 import time
 from contextlib import contextmanager
+from ctypes import wintypes
 from pathlib import Path
 
 # Observation layout. The plugin appends n_rays distances from the pot to the terrain, counter-clockwise from +x.
@@ -66,10 +68,34 @@ def start(game_dir, port=None, width=640, height=360, args=(), **config):
         proc = subprocess.Popen([str(exe), "-goi-rl", "-goi-port", str(port), "-screen-fullscreen", "0",
                                  "-screen-width", str(width), "-screen-height", str(height), *args], cwd=game_dir)
         try:
-            return proc, GoiClient(port=port, width=width, height=height, **config)
+            client = GoiClient(port=port, width=width, height=height, **config)
         except BaseException:
             proc.kill()  # a game we launched but couldn't reach would never quit on its own
             raise
+    if not config.get("render"):
+        show_window(proc.pid, False)
+    return proc, client
+
+
+def show_window(pid, shown):
+    """Show or minimize a game's window, without activating it. With rendering off its frames are blank, and 8-10
+    windows on the desktop presenting ~20 frames a second each kept the GPU's memory at full clock: the RTX 3090 drew
+    110 W instead of 35 W. A game that is to render must be shown first (a minimized window may not render)."""
+    user32 = ctypes.windll.user32
+    windows = []
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def each(hwnd, _):
+        owner = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+        if owner.value == pid and user32.IsWindowVisible(hwnd):
+            windows.append(hwnd)
+        return True
+
+    user32.EnumWindows(each, 0)
+    for hwnd in windows:
+        user32.ShowWindow(hwnd, 4 if shown else 7)  # SW_SHOWNOACTIVATE, SW_SHOWMINNOACTIVE
+    return len(windows)
 
 
 class GoiClient:

@@ -6,7 +6,7 @@ import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 
-from .client import OBS_FIELDS, GoiClient, start
+from .client import OBS_FIELDS, GoiClient, show_window, start
 
 # Mouse input at action 1. The game's acceleration curve makes small inputs fine (below ~3: under 0.15 units of cursor
 # travel per step) and large ones flicks (12: the whole 3.5 reach in one step).
@@ -149,6 +149,8 @@ class GoiEnv(gym.Env):
     def start_rendering(self, width=1280, height=720):
         """Turn rendering on in a game launched without it: render() returns frames from then on. The physics doesn't
         change (the smoke test's "rendering on vs off"), so a path found without rendering replays the same with it."""
+        if self._proc:
+            show_window(self._proc.pid, True)  # games without rendering start minimized (client.start)
         self.client.configure(**{**self._config, "render": True, "width": width, "height": height})
         self.render_mode = "rgb_array"
         for _ in range(100):  # the new window size takes a few frames (each frame() waits for one; no physics)
