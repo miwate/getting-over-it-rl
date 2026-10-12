@@ -72,6 +72,7 @@ def main():
     ap.add_argument("--tries", type=int, default=10, help="tries per start")
     ap.add_argument("--stats", help="a run's demo-stats.npy: keep only starts it crossed from less than --hard")
     ap.add_argument("--hard", type=float, default=0.3)
+    ap.add_argument("--near", type=float, help="then only starts at this progress or more (the crux at a stretch's end)")
     ap.add_argument("--most", type=int, default=600, help="at most this many starts (spread out)")
     ap.add_argument("--games", type=int, default=8)
     ap.add_argument("--out", required=True, help=".npz of labels (obs, actions) for distill.py")
@@ -91,7 +92,10 @@ def main():
         if not np.allclose(stats[:, 2], progress):
             ap.error("--states aren't the run's demos in its order (progress differs)")
         p = (stats[:, 1] + 1) / (stats[:, 0] + 2)
-        starts = [s for s, q, n in zip(starts, p, stats[:, 0]) if n >= 1 and q < args.hard]
+        starts = [s for s, q, n, at in zip(starts, p, stats[:, 0], progress) if n >= 1 and q < args.hard
+                  and (args.near is None or at >= args.near)]
+    elif args.near is not None:
+        starts = [s for s, at in zip(starts, progress) if at >= args.near]
     starts = [starts[int(k)] for k in np.linspace(0, len(starts) - 1, min(len(starts), args.most))] if starts else []
     print(f"{len(starts)} starts at {lo:.0f}-{hi:.0f}, {args.tries} tries each, to {args.goal:.0f}", flush=True)
     X, A, wins = [], [], []
