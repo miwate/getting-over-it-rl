@@ -70,9 +70,10 @@ class Starts(gym.Wrapper):
     before the hard states were learned (chapel: 40 states back in training, 0/10 from 8 s before the end).
     With `demo_priority` (reverse curriculum by success rate: Florensa et al. 2017, Salimans & Chen 2018, prioritized
     replay of levels, Jiang et al. 2021): each demo state's tries and successes (reaching the window's end) are counted,
-    decayed by 0.9 a try, and starts are drawn with weight (p(1 - p))^2 + 0.001, p = (successes + 1) / (tries + 2):
-    practice goes where the outcome is still open (~10x a decided start's share), which moves back along every path as
-    the agent learns. Below the chapel jump the networks finished from 1 s before the end 84-88% of the time, from 2 s
+    decayed by 0.9 a try, and starts are drawn with weight (p(1 - p))^2 + 0.0001, p = (successes + 0.5) / (tries + 1):
+    practice goes where the outcome is still open (~33x a decided start's share), which moves back along every path as
+    the agent learns. With the prior of 1 and floor of 0.001 at first, a decided start still had a tenth of an open one's
+    share, and at the anvil, where 250 of 270 starts were hopeless, 65% of practice went to them. Below the chapel jump the networks finished from 1 s before the end 84-88% of the time, from 2 s
     14-22%, from 3 s 3-4%. The counts are shared by the run's games through the `demo_stats` file (they load the same
     exported states in the same order, checked by progress): counted per game, each start had ~3 tries a game and the
     prior kept every p within 0.1-0.9.
@@ -126,8 +127,8 @@ class Starts(gym.Wrapper):
             self.stats[self.demo_i, :2] = (0.9 * n + 1, 0.9 * wins + (game.best_progress >= self.demo_window[1]))
             self.tried += 1
             if self.tried % 1000 == 0:
-                n, wins = self.stats[:, 0], self.stats[:, 1]
-                p, w, known = (wins + 1) / (n + 2), self._weights(self.stats), n >= 3
+                n = self.stats[:, 0]
+                p, w, known = self._p(self.stats), self._weights(self.stats), n >= 3
                 open_ = known & (p >= 0.1) & (p <= 0.9)
                 print(f"demo starts: {np.mean(n > 0):.0%} of {len(n)} tried; with 3+ tries: {np.mean(p[known] < 0.1):.0%} "
                       f"hopeless, {np.mean(p[known] > 0.9):.0%} done, {np.mean(open_[known]):.0%} open (drawn "
@@ -193,9 +194,13 @@ class Starts(gym.Wrapper):
                 self.bins[b] = [game.save_state(), 0]
 
     @staticmethod
+    def _p(stats):
+        return (stats[:, 1] + 0.5) / (stats[:, 0] + 1)
+
+    @staticmethod
     def _weights(stats):
-        p = (stats[:, 1] + 1) / (stats[:, 0] + 2)
-        return (p * (1 - p)) ** 2 + 1e-3
+        p = Starts._p(stats)
+        return (p * (1 - p)) ** 2 + 1e-4
 
     def _open_stats(self):
         """(tries, successes, progress) per demo state: the rows of the shared demo_stats file if this game's demo
