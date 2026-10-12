@@ -93,8 +93,14 @@ def show_window(pid, shown):
         return True
 
     user32.EnumWindows(each, 0)
-    for hwnd in windows:
-        user32.ShowWindow(hwnd, 4 if shown else 7)  # SW_SHOWNOACTIVATE, SW_SHOWMINNOACTIVE
+    # Unity applies the window size set at connect a frame later, which can restore a minimized window (2 of 10):
+    # minimizing checks again for 3 s
+    for _ in range(1 if shown else 12):
+        for hwnd in windows:
+            if shown or not user32.IsIconic(hwnd):
+                user32.ShowWindow(hwnd, 4 if shown else 7)  # SW_SHOWNOACTIVATE, SW_SHOWMINNOACTIVE
+        if not shown:
+            time.sleep(0.25)
     return len(windows)
 
 
