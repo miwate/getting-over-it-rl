@@ -364,19 +364,21 @@ class Player:
 
 def chain(base, then=(), noise=0.5, margin=2.0):
     """A player made of checkpoints that take over by route progress: base, then each (from, checkpoint) from that
-    progress on. A specialist for a stretch hands back to the earlier player below it, e.g. after a fall. A handover
-    waits until progress is `margin` past the boundary, so progress wavering around one (standing there, or mid-air in
-    a jump: 430 is) doesn't swap players back and forth; at step 0 the player is picked by progress alone."""
+    progress on. A specialist for a stretch hands back to the earlier player below it, e.g. after a fall, but only once
+    progress is `margin` below its boundary, so progress wavering around one (standing there, or mid-air in a jump)
+    doesn't swap players back and forth: games lost 7-8 min each at 250 that way. Handing over upward waits for
+    nothing: waiting for `margin` past the boundary too left rw-port alone at the chimney's foot and cost 7-34 min a
+    game at 140-180 (m19). At step 0 the player is picked by progress alone."""
     players = [(-np.inf, Player(base, noise))] + sorted(((t[0], Player(t[1], t[2] if len(t) > 2 else noise))
                                                          for t in then), key=lambda t: t[0])
     current = [0]
 
     def play(obs, step):
         p = obs[PROGRESS]
+        up = max(i for i, (f, _) in enumerate(players) if p >= f)  # the player for this progress
         if step == 0:
-            current[0] = max(i for i, (f, _) in enumerate(players) if p >= f)
-        up = max(i for i, (f, _) in enumerate(players) if p >= f + margin)  # boundaries left behind by `margin`
-        down = max(i for i, (f, _) in enumerate(players) if p >= f - margin)
+            current[0] = up
+        down = max(i for i, (f, _) in enumerate(players) if p >= f - margin)  # boundaries fallen `margin` below
         current[0] = min(max(current[0], up), down)
         return players[current[0]][1](obs, step)
     return play
