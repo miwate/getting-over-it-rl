@@ -115,12 +115,11 @@ class GoiEnv(gym.Env):
         a = np.clip(action, -1.0, 1.0)
         self._actions.appendleft(tuple(a))
         raw = self.client.step(*(a * self.mouse))
-        best = self.best_progress
+        best, held = self.best_progress, raw[POT_CONTACT] or raw[HEAD_CONTACT]
         if self.held_records:  # in the air nothing is new; touching down pays for the ground gained since the last hold
-            held = raw[POT_CONTACT] or raw[HEAD_CONTACT]
             best = self.held_best if held else max(self.held_best, raw[PROGRESS])
-            if held:
-                self.held_best = max(self.held_best, raw[PROGRESS])
+        if held:  # the record held (always kept: successes count it, not mid-air peaks, which fall back)
+            self.held_best = max(self.held_best, raw[PROGRESS])
         reward = (progress_reward(self._progress, raw[PROGRESS], best, 1.0 - raw[POT_CONTACT], **self.weights)
                   - self.time_penalty - self.action_cost * float(np.mean(a * a)))
         self._progress = raw[PROGRESS]
@@ -138,7 +137,8 @@ class GoiEnv(gym.Env):
         if self._realtime:  # the bridge itself runs many times faster than real time
             self._frame_due = max(self._frame_due + 1 / self.metadata["render_fps"], time.perf_counter())
             time.sleep(max(0.0, self._frame_due - time.perf_counter()))
-        return self._observe(raw), reward, terminated, truncated, {"best_progress": self.best_progress}
+        return self._observe(raw), reward, terminated, truncated, {"best_progress": self.best_progress,
+                                                                   "held_best": self.held_best}
 
     def render(self):
         if self.render_mode == "rgb_array":

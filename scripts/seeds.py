@@ -22,7 +22,7 @@ from goi_env import OBS_FIELDS, GoiEnv
 from plan import decide
 from train import chain
 
-PROGRESS = OBS_FIELDS.index("progress")
+PROGRESS, POT, HEAD = (OBS_FIELDS.index(f) for f in ("progress", "pot_contact", "head_contact"))
 PERIODIC = 1
 
 
@@ -47,7 +47,7 @@ def search(game, start, prior, rng, args):
             if terminated:
                 break
         p = float(obs[PROGRESS])
-        if p >= args.goal and not terminated:
+        if p >= args.goal and not terminated and (obs[POT] or obs[HEAD]):  # held there, not a mid-air peak
             game.drop_state(peak[0])
             return path, cuts
         if p > best + 0.5 and not terminated:

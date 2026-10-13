@@ -21,7 +21,7 @@ import torch
 from goi_env import OBS_FIELDS, GoiEnv
 from train import STALL_SECONDS, Player
 
-PROGRESS = OBS_FIELDS.index("progress")
+PROGRESS, POT, HEAD = (OBS_FIELDS.index(f) for f in ("progress", "pot_contact", "head_contact"))
 G = {}
 
 
@@ -48,7 +48,8 @@ def tries(job):
                 xs.append(obs)
                 acts.append(a)
                 obs, *_ = game.step(a)
-                best = max(best, float(obs[PROGRESS]))
+                if obs[POT] or obs[HEAD]:  # held there, not a mid-air peak
+                    best = max(best, float(obs[PROGRESS]))
                 if best >= args.goal:
                     X += xs
                     A += acts

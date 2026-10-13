@@ -16,7 +16,7 @@ import torch
 from goi_env import OBS_FIELDS, GoiEnv
 from train import STALL_SECONDS, Player, demo_steps
 
-PROGRESS = OBS_FIELDS.index("progress")
+PROGRESS, POT, HEAD = (OBS_FIELDS.index(f) for f in ("progress", "pot_contact", "head_contact"))
 ARRIVAL = 0  # marathon.py's kind of a state saved where a game first reached a section
 
 
@@ -64,7 +64,8 @@ def run(state, args, candidates):
                 start = best = obs[PROGRESS]
                 for step in range(int(args.seconds * 30)):
                     obs, *_ = game.step(player(obs, step))
-                    best = max(best, obs[PROGRESS])
+                    if obs[POT] or obs[HEAD]:  # held there: the anvil's leap peaked at 543 in the air 52 times
+                        best = max(best, obs[PROGRESS])
                     if best >= args.goal:
                         wins += 1
                         break

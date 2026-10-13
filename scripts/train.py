@@ -116,7 +116,7 @@ class Starts(gym.Wrapper):
             if self.demo_priority:
                 self.stats = self._open_stats()
         if self.curriculum and self.start == "frontier":  # how the last episode from the frontier went
-            self.outcomes.append(game.best_progress >= self.demo_window[1])
+            self.outcomes.append(game.held_best >= self.demo_window[1])  # held there: a mid-air peak isn't
             if len(self.outcomes) >= 20:
                 if np.mean(self.outcomes) >= 0.3 and self.back_k < len(self.demos):
                     self.back_k = min(self.back_k + 5, len(self.demos))
@@ -124,7 +124,7 @@ class Starts(gym.Wrapper):
                 self.outcomes = []
         if self.demo_priority and self.start == "demo":  # how the last episode from a demo start went
             n, wins = self.stats[self.demo_i, :2]
-            self.stats[self.demo_i, :2] = (0.9 * n + 1, 0.9 * wins + (game.best_progress >= self.demo_window[1]))
+            self.stats[self.demo_i, :2] = (0.9 * n + 1, 0.9 * wins + (game.held_best >= self.demo_window[1]))
             self.tried += 1
             if self.tried % 1000 == 0:
                 n = self.stats[:, 0]

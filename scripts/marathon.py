@@ -25,7 +25,7 @@ from goi_env import OBS_FIELDS, GoiEnv
 from sections import SECTIONS
 from train import STALL_SECONDS, chain, parse_then
 
-PROGRESS, WON = OBS_FIELDS.index("progress"), OBS_FIELDS.index("won")
+PROGRESS, WON, POT, HEAD = (OBS_FIELDS.index(f) for f in ("progress", "won", "pot_contact", "head_contact"))
 FALL = 10  # progress lost from a local peak that counts as a fall
 ARRIVAL, PERIODIC, EVERY = 0, 1, 60 * 30  # kinds of exported states; a periodic one every minute of game time
 MARK = 5  # an arrival state the first time a game reaches each multiple of this (and each section start)
@@ -41,7 +41,7 @@ def play(seed, args):
     player = chain(args.checkpoint, parse_then(args.then), args.noise)
     # The agent's own record and stall count as in training episodes (GoiEnv record_reset; the stall count re-arms).
     game = GoiEnv(args.game_dir, stall_steps=int(STALL_SECONDS * 30), stall_ends=False, record_reset=args.record_reset)
-    actions, trace, states = [], [], []  # states: (progress, step, kind, exported bytes)
+    actions, trace, held, states = [], [], [], []  # states: (progress, step, kind, exported bytes)
     marks = sorted(set(start for start, _ in SECTIONS[1:]) | set(range(MARK, int(SECTIONS[-1][0]) + 1, MARK)))
     pool = [(f, i) for f in sorted(f for pattern in args.start_states for f in glob.glob(pattern))
             for i, p in enumerate(np.load(f)["progress"]) if args.region[0] <= p < args.region[1]]
@@ -75,6 +75,7 @@ def play(seed, args):
             obs, *_ = game.step(a)
             actions.append(a)
             trace.append(obs[PROGRESS])
+            held.append(bool(obs[POT] or obs[HEAD]))
             if obs[WON] > 0.5:
                 break
             while todo and obs[PROGRESS] >= todo[0]:  # first arrival at a mark (stretches start anywhere, e.g. 430)
@@ -95,7 +96,8 @@ def play(seed, args):
     trace = np.array(trace, np.float32)
     np.savez(f"{args.out}-{seed}.npz", climb0=np.zeros((0, 2), np.float32), try0=np.array(actions),
              cuts0=np.array([0]), trace=trace, reached=np.array([len(actions) - 1]), goal=float(trace.max()))
-    return trace, obs is not None and bool(obs[WON] > 0.5)
+    held = np.array(held, bool)
+    return trace, obs is not None and bool(obs[WON] > 0.5), float(trace[held].max()) if held.any() else float("nan")
 
 
 def falls(trace):
@@ -136,7 +138,7 @@ def main():
         results = list(ex.map(play, range(args.games), repeat(args)))
     n = len(SECTIONS)
     time_in = np.zeros((args.games, n))
-    for g, (trace, won) in enumerate(results):
+    for g, (trace, won, held_best) in enumerate(results):
         secs = np.array([section(p) for p in trace])
         time_in[g] = np.bincount(secs, minlength=n)[:n] / 30
         reach = []
@@ -145,16 +147,18 @@ def main():
             if hit is not None:
                 reach.append(f"{name} {hit / 30 / 60:.1f}m")
         big = sorted(falls(trace), key=lambda f: f[1] - f[0])[:3]
-        print(f"game {g}: best {trace.max():.1f}{' WON' if won else ''} in {len(trace) / 30 / 60:.0f} min; "
+        # held: the best progress with the pot or hammer touching something (a mid-air peak falls back)
+        print(f"game {g}: best {trace.max():.1f} (held {held_best:.1f}){' WON' if won else ''} in "
+              f"{len(trace) / 30 / 60:.0f} min; "
               f"falls {len(falls(trace))}, biggest " + ", ".join(f"{a:.0f}->{b:.0f}" for a, b in big))
         print(f"   first reached: {', '.join(reach[-4:])}")
     print(f"\nper section, over {args.games} games ({args.minutes:.0f} min each):")
     print(f"{'section':<20}{'reached':>9}{'mean min spent':>16}")
     for i, (start, name) in enumerate(SECTIONS[:-1]):
-        reached = sum((tr >= start).any() for tr, _ in results)
+        reached = sum((tr >= start).any() for tr, _, _ in results)
         if reached:
             print(f"{name:<20}{reached:>5}/{args.games:<3}{time_in[:, i].mean() / 60:>14.1f}")
-    print(f"won: {sum(w for _, w in results)}/{args.games}")
+    print(f"won: {sum(w for _, w, _ in results)}/{args.games}")
 
 
 if __name__ == "__main__":
