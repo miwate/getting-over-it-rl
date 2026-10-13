@@ -35,15 +35,20 @@ PROGRESS = OBS_FIELDS.index("progress")
 
 
 def future(game, state, policy, offsets, horizon):
-    """Play one candidate from `state`: returns (score, actions). Offsets None: pure random strokes."""
-    obs, actions = game.load_state(state), []
+    """Play one candidate from `state`: returns (score, actions). Offsets None: pure random strokes. The score is the
+    progress held at the end (the pot or hammer touching something); a future that ends in the air scores the lowest
+    progress it passed: scoring the end progress, mid-air included, preferred flings that were high at that moment
+    and fell (at the anvil's leap the search found ~2 paths in 40 tries, where it found the jump in 20 of 24)."""
+    obs, actions, low = game.load_state(state), [], np.inf
     for t in range(horizon):
         a = offsets[t] if policy is None else np.clip(policy(obs, t) + offsets[t], -1, 1)
         actions.append(np.asarray(a, np.float32))
         obs, _, terminated, _, _ = game.step(actions[-1])
         if terminated and (obs[OBS_FIELDS.index("won")] < 0.5):
             return -np.inf, actions  # the lake or the Snake
-    return float(obs[PROGRESS]), actions
+        low = min(low, float(obs[PROGRESS]))
+    held = obs[OBS_FIELDS.index("pot_contact")] or obs[OBS_FIELDS.index("head_contact")]
+    return (float(obs[PROGRESS]) if held else low), actions
 
 
 def decide(game, state, policy, rng, args):

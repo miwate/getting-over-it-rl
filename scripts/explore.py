@@ -23,7 +23,7 @@ import numpy as np
 
 from goi_env import OBS_FIELDS, GoiEnv
 
-PROGRESS, POT_Y = OBS_FIELDS.index("progress"), OBS_FIELDS.index("pot_y")
+PROGRESS, POT_Y, POT, HEAD = (OBS_FIELDS.index(f) for f in ("progress", "pot_y", "pot_contact", "head_contact"))
 
 
 def cell(obs):
@@ -72,7 +72,7 @@ def go_explore(game, rng, obs, goal, budget, segment=120, focus=4.0, player=None
                         game.drop_state(archive[k][0])
                     archive[k] = [game.save_state(), path + [np.array(taken)], steps + t + 1, 0, p]
                 info["furthest"], info["cells"] = max(info["furthest"], p), len(archive)
-                if p >= goal:
+                if p >= goal and (obs[POT] or obs[HEAD]):  # held there: a mid-air peak falls back
                     yield path + [np.array(taken)]
                     break
     finally:
