@@ -1,13 +1,16 @@
-"""RLPD (Ball et al., 2023): SAC that learns from its own play and from a climb path's transitions at once, half of
-every batch from each, with LayerNorm in the critics. Off-policy, so every transition is learned from many times
-instead of once as in PPO: the bet is fewer game steps for the same skill, where PPO learns hard sections slowly.
+"""RLPD (Ball et al., 2023): SAC that learns from its own play and from other players' transitions at once, half of
+every batch from each, with LayerNorm in the critics. Off-policy, so every transition is learned from many times,
+and transitions the network never made itself count too: PPO only learns from its own play, and at the anvil's leap
+the network has no landing of its own to learn from (its 52 "arrivals" at 543 were mid-air peaks), while Go-Explore
+landed it 18 times. So: the offline half is the transitions of --offline demos (explore.py's paths, replayed) inside
+the stretch; the online half is episodes as train.py's: from --demos' exported states in --demo-window, with the new
+objective (falls end episodes, progress pays only where held, starts weighted by success).
 
-Same episodes as train.py's path curriculum (starts on the path near a stretch's end, moving back as they succeed;
-rewinds after falls; traps). The actor starts from a PPO specialist (same trunk; its tanh mean becomes SAC's tanh
-squashing); the critics start fresh, so the actor is frozen for --critic-warmup steps while they catch up. Observation
-normalization is the specialist's, fixed. Checkpoints are sac_<n>_steps.zip (train.Player plays them).
+The actor starts from a PPO specialist (same trunk; its tanh mean becomes SAC's tanh squashing); the critics start
+fresh, so the actor is frozen for --critic-warmup steps while they catch up. Observation normalization is the
+specialist's, fixed. Checkpoints are sac_<n>_steps.zip (train.Player plays them).
 
-    python scripts/rlpd.py --warm runs/chx-rewind/checkpoints/ppo_18000000_steps.zip --window 415 465 --name rlpd-chapel
+    python scripts/rlpd.py --warm runs/anvil-leap-m28-a/checkpoints/ppo_20003840_steps.zip --window 536 545 --demo-window 536 543 --demos runs/seeds/anvil-explore.npz --offline runs/demos/explore-anvil.npz --name rlpd-leap
 """
 import argparse
 import os
@@ -26,7 +29,7 @@ from goi_env import OBS_FIELDS, GoiEnv
 from policy import LayerNormSACPolicy
 from train import STALL_SECONDS, ProgressLog, demo_steps, make_env, vecnormalize_path
 
-PROGRESS, LAKE = OBS_FIELDS.index("progress"), OBS_FIELDS.index("fell_in_lake")
+PROGRESS, LAKE, POT, HEAD = (OBS_FIELDS.index(f) for f in ("progress", "fell_in_lake", "pot_contact", "head_contact"))
 
 
 class MixedBuffer(ReplayBuffer):
@@ -41,24 +44,29 @@ class MixedBuffer(ReplayBuffer):
 
 
 def path_transitions(game, path, lo, hi, buffer):
-    """The path's transitions inside [lo, hi) of route progress, with the reward GoiEnv pays for them (new records
-    from the stretch's entry, minus the time penalty), into `buffer`. Returns how many."""
-    z, best, prev = np.load(path), None, None
-    n = 0
-    for t, obs, a in demo_steps(game, z, 0):
-        p = float(obs[PROGRESS])
-        if prev is not None:
-            o, act, bp = prev
-            reward = max(0.0, p - bp) - game.time_penalty
-            buffer.add(o[None], obs[None], act[None], np.array([reward]), np.array([obs[LAKE] > 0]), [{}])
-            n += 1
-        if a is None or p >= hi:
-            break
-        if p >= lo:
-            best = p if best is None else max(best, p)
-            prev = (obs, np.asarray(a, np.float32), best)
-        else:
-            prev = None
+    """Every path's transitions inside [lo, hi) of route progress (explore.py's or a climb's paths, replayed), with the
+    reward GoiEnv pays for them under the new objective (new ground where it is held, from the stretch's entry, minus
+    the time penalty), into `buffer`. Returns how many."""
+    z, n = np.load(path), 0
+    for j in range(len(z["reached"])):
+        held, prev = None, None
+        for t, obs, a in demo_steps(game, z, j):
+            if obs is None:
+                continue
+            p = float(obs[PROGRESS])
+            touching = bool(obs[POT] or obs[HEAD])
+            if prev is not None:
+                o, act, best = prev
+                reward = (max(0.0, p - best) if touching else 0.0) - game.time_penalty
+                buffer.add(o[None], obs[None], act[None], np.array([reward]), np.array([obs[LAKE] > 0]), [{}])
+                n += 1
+            if a is None or p >= hi:
+                break
+            if p >= lo:
+                held = p if held is None else max(held, p) if touching else held
+                prev = (obs, np.asarray(a, np.float32), held)
+            else:
+                prev = None
     return n
 
 
@@ -98,11 +106,14 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--warm", required=True, help="a PPO specialist checkpoint: the actor and the normalization")
     ap.add_argument("--window", type=float, nargs=2, required=True, metavar=("LO", "HI"), help="the stretch")
-    ap.add_argument("--path", default=os.path.join("runs", "climbs", "win-e4.npz"), help="a climb path")
+    ap.add_argument("--demo-window", type=float, nargs=2, metavar=("LO", "HI"),
+                    help="the online starts' stretch and success (default: --window)")
+    ap.add_argument("--demos", nargs="+", required=True, help="exported state files to start episodes from")
+    ap.add_argument("--offline", nargs="+", required=True, help="demos files whose transitions are the offline half")
     ap.add_argument("--name", required=True)
     ap.add_argument("--steps", type=int, default=2_000_000)
     ap.add_argument("--envs", type=int, default=10)
-    ap.add_argument("--utd", type=float, default=1.0, help="gradient steps per environment step")
+    ap.add_argument("--utd", type=float, default=0.5, help="gradient steps per environment step")
     ap.add_argument("--critic-warmup", type=int, default=50_000, help="environment steps with the actor frozen")
     ap.add_argument("--gamma", type=float, default=0.995)
     ap.add_argument("--save-every", type=int, default=250_000)
@@ -111,11 +122,17 @@ def main():
     if not args.game_dir:
         ap.error("pass --game-dir or set GOI_GAME_DIR")
     lo, hi = args.window
+    demo_window = tuple(args.demo_window or args.window)
     run_dir = os.path.join("runs", args.name)
+    os.makedirs(run_dir, exist_ok=True)
+    stats = os.path.join(run_dir, "demo-stats.npy")
+    if not os.path.exists(stats):  # the games' shared success counts per start (train.py --demo-priority)
+        np.lib.format.open_memmap(stats, mode="w+", dtype=np.float64, shape=(200_000, 3)).flush()
 
     stall = int(STALL_SECONDS * 30)
     env = partial(make_env, args.game_dir, 4, 1800, stall, 0.2, 1.0, traps=0.2, window=(lo - 6, hi + 5),
-                  demos=args.path, demo_share=0.6, demo_window=(lo, hi), demo_curriculum=True)
+                  demos=args.demos, demo_share=0.6, demo_window=demo_window, demo_priority=True, falls_terminal=True,
+                  demo_stats=stats, held_records=True)
     with open(vecnormalize_path(args.warm), "rb") as f:
         venv = pickle.load(f)
     venv.set_venv(VecMonitor(SubprocVecEnv([env] * args.envs), info_keywords=("best_progress", "from_bottom", "rewinds")))
@@ -128,8 +145,9 @@ def main():
 
     game = GoiEnv(args.game_dir, stall_steps=stall, stall_ends=False, snake_ends=True)
     try:
-        offline = ReplayBuffer(200_000, venv.observation_space, venv.action_space, model.device)
-        print(f"{path_transitions(game, args.path, lo, hi, offline)} path transitions in {lo:.0f}-{hi:.0f}", flush=True)
+        offline = ReplayBuffer(500_000, venv.observation_space, venv.action_space, model.device)
+        n = sum(path_transitions(game, f, lo, hi, offline) for f in args.offline)
+        print(f"{n} offline transitions in {lo:.0f}-{hi:.0f}", flush=True)
     finally:
         game.close()
     model.replay_buffer.offline = offline
