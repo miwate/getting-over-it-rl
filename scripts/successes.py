@@ -105,7 +105,8 @@ def main():
             A += a
             wins.append(w)
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
-    np.savez(args.out, obs=np.array(X, np.float32).reshape(len(X), -1), actions=np.array(A, np.float32).reshape(-1, 2))
+    width = len(X[0]) if X else 0
+    np.savez(args.out, obs=np.array(X, np.float32).reshape(len(X), width), actions=np.array(A, np.float32).reshape(-1, 2))
     wins = np.array(wins)
     print(f"{wins.sum()} successes of {len(starts) * args.tries} tries ({np.mean(wins > 0):.0%} of starts crossed at "
           f"least once); {len(X)} labels -> {args.out}")
