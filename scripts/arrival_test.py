@@ -87,6 +87,9 @@ def main():
                          "states, path_states.py, or the path itself, replayed)")
     ap.add_argument("--after", type=float, help="test re-climbs: from the states saved in the stretch after a game "
                                                  "had been at this progress (at most --most of them, spread out)")
+    ap.add_argument("--fill", nargs="*", default=[], help="with fewer than --least marathon states: also the states of "
+                                                          "these files (seeds, paths) at at..at+3, all of them")
+    ap.add_argument("--least", type=int, default=8)
     ap.add_argument("--most", type=int, default=24)
     ap.add_argument("--tries", type=int, default=10)
     ap.add_argument("--games", type=int, default=8, help="games at once (one per state; ~2.3 GB of RAM each)")
@@ -95,6 +98,10 @@ def main():
     if not args.game_dir:
         ap.error("pass --game-dir or set GOI_GAME_DIR")
     states = arrivals(sorted(f for pattern in args.states for f in glob.glob(pattern)), args.at, args.goal, args.after)
+    if len(states) < args.least and args.after is None:  # few games got here (the anvil's cliff: 1): seeds' states too
+        for f in args.fill:
+            p = np.load(f)["progress"]
+            states += [(f, i) for i in range(len(p)) if args.at <= p[i] < args.at + 3]
     states = [states[int(k)] for k in np.linspace(0, len(states) - 1, min(len(states), args.most))] if states else []
     if not states:  # no marathon game got here yet: the path's state, tried 4 times as often
         print(f"no exported state at {args.at:.0f}-{args.goal:.0f}: from {args.path}")

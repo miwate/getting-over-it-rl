@@ -114,7 +114,8 @@ def main():
             subprocess.run([PY, "scripts/train.py", "--name", run, *start, *common], stdout=f, stderr=subprocess.STDOUT)
     candidates = [f"{last_checkpoint(r)}@{noise}".replace("\\", "/") for r in runs for noise in (1, 0.5)] + [current]
     test = subprocess.run([PY, "scripts/arrival_test.py", str(lo), str(hi), str(args.seconds), *candidates,
-                           "--states", *states, "--path", PATH_STATES, "--tries", str(args.tries), *after("--after")],
+                           "--states", *states, "--path", PATH_STATES, "--tries", str(args.tries), *after("--after"),
+                           "--fill", *args.seeds, PATH_STATES],
                           capture_output=True,
                           text=True).stdout
     scores = {}
