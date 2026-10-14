@@ -82,11 +82,12 @@ class Starts(gym.Wrapper):
     """
 
     def __init__(self, env, saved_share=0.5, rewind_share=0.5, bin_size=2.0, fall=5.0, every=30, max_retries=3,
-                 trap_share=0.0, trap_after=150, pool=30, refresh=0.0, frontier=0.0, window=None, place=None, place_at=(), demos=None, demo_share=0.0, demo_back=300, demo_window=None, demo_curriculum=False, demo_after=None, demo_priority=False, falls_terminal=False, demo_stats=None):
+                 trap_share=0.0, trap_after=150, pool=30, refresh=0.0, frontier=0.0, window=None, place=None, place_at=(), demos=None, demo_share=0.0, demo_back=300, demo_window=None, demo_curriculum=False, demo_after=None, demo_priority=False, falls_terminal=False, demo_stats=None,
+                 airborne_falls=False):
         super().__init__(env)
         self.demo_priority, self.demo_stats, self.stats, self.demo_i, self.tried = demo_priority, demo_stats, None, None, 0
         self.demo_progress = []  # each demo state's progress (None once a replayed demo is loaded: games may differ)
-        self.falls_terminal = falls_terminal
+        self.falls_terminal, self.airborne_falls = falls_terminal, airborne_falls
         self.demo_window, self.demo_after = demo_window, demo_after
         self.curriculum, self.back_k, self.outcomes, self.start = demo_curriculum, 10, [], None
         self.demo_path, self.demo_share, self.demo_back, self.demos = demos, demo_share, demo_back, []  # demo state ids
@@ -277,7 +278,11 @@ class Starts(gym.Wrapper):
             if len(self.traps) > self.pool:
                 game.drop_state(self.traps.pop(0))
         if self.rewinds and not terminated:
-            if obs[GAP] > self.fall:
+            # with airborne_falls, losing ground counts as a fall only in the air (nothing touched for 0.5 s) or past
+            # 30: the way up goes back 9-25 below the record while holding on (swinging on the bucket, under the
+            # anvil's boulder, the ice, the mast), and as deaths those moves could never be learned
+            fell = obs[GAP] > self.fall and (not self.airborne_falls or game.air >= 15 or obs[GAP] > 30)
+            if fell:
                 before = [state for state, gap in self.recent if gap < 1.0]  # saved near the record: before the fall
                 if before and self.retries < self.max_retries:
                     self.retry = before[-2] if len(before) > 1 else before[-1]
@@ -320,14 +325,14 @@ def demo_steps(game, z, j):
 def make_env(game_dir, k, episode_steps, stall_steps, saved_starts, rewinds, traps=0.0, refresh=0.0, frontier=0.0,
              window=None, place=None, place_at=(), demos=None, demo_share=0.0, demo_back=300, demo_window=None,
              demo_curriculum=False, demo_after=None, demo_priority=False, falls_terminal=False, demo_stats=None,
-             **env_kwargs):
+             airborne_falls=False, **env_kwargs):
     """env_kwargs: GoiEnv's action_cost, mouse and reward weights."""
     env = Starts(GoiEnv(game_dir, k=k, stall_steps=stall_steps, snake_ends=True, **env_kwargs), saved_starts, rewinds,
                  trap_share=traps,
                  trap_after=(stall_steps or 300) // 2, refresh=refresh, frontier=frontier, window=window, place=place,
                  place_at=place_at, demos=demos, demo_share=demo_share, demo_back=demo_back, demo_window=demo_window,
                  demo_curriculum=demo_curriculum, demo_after=demo_after, demo_priority=demo_priority,
-                 falls_terminal=falls_terminal, demo_stats=demo_stats)
+                 falls_terminal=falls_terminal, demo_stats=demo_stats, airborne_falls=airborne_falls)
     return TimeLimit(env, episode_steps)
 
 
@@ -511,6 +516,8 @@ def main():
                     help="with --demo-window: favor demo starts the agent crosses from only sometimes (weight p(1-p))")
     ap.add_argument("--falls-terminal", action="store_true",
                     help="with --rewinds: a fall's cut ends the episode as a death, not a truncation the critic fills in")
+    ap.add_argument("--airborne-falls", action="store_true",
+                    help="with --rewinds: a fall is losing ground in the air (or past 30), not a controlled move back")
     ap.add_argument("--held-records", action="store_true",
                     help="new ground pays only while the pot or hammer touches something, not at mid-air peaks")
     ap.add_argument("--place-at", nargs="+", default=[], metavar="ALONG:DX",
@@ -569,7 +576,7 @@ def main():
                     [tuple(map(float, spot.split(":"))) for spot in args.place_at], args.demos, args.demo_share,
                     int(args.demo_back * 120 / args.k), args.demo_window, args.demo_curriculum, args.demo_after,
                     demo_priority=args.demo_priority, falls_terminal=args.falls_terminal, demo_stats=demo_stats,
-                    **env_kwargs)] * args.envs
+                    airborne_falls=args.airborne_falls, **env_kwargs)] * args.envs
     collector = Collector(envs) if args.collector == "async" else None
     venv = (Spaces(args.envs, collector.observation_space, collector.action_space) if collector else
             VecMonitor(SubprocVecEnv(envs), info_keywords=("best_progress", "from_bottom", "rewinds")))

@@ -97,6 +97,7 @@ class GoiEnv(gym.Env):
         self.observation_space = spaces.Box(-np.inf, np.inf, (self.client.obs_size + 2 * PREV_ACTIONS + 2,), np.float32)
         self.action_space = spaces.Box(-1.0, 1.0, (2,), np.float32)
         self.best_progress = self.held_best = 0.0  # the record, and the record made while touching something
+        self.air = 0  # steps since the pot or the hammer last touched something
         self._saved_best = {}
 
     def reset(self, *, seed=None, options=None):
@@ -107,7 +108,7 @@ class GoiEnv(gym.Env):
         else:
             raw = self.client.reset() if options.get("state") is None else self.client.load_state(options["state"])
         self.best_progress = self.held_best = self._stall_mark = self._progress = raw[PROGRESS]
-        self.stalled = 0
+        self.stalled = self.air = 0
         self._actions = deque([(0.0, 0.0)] * PREV_ACTIONS, maxlen=PREV_ACTIONS)
         return self._observe(raw), {"best_progress": self.best_progress}
 
@@ -120,6 +121,7 @@ class GoiEnv(gym.Env):
             best = self.held_best if held else max(self.held_best, raw[PROGRESS])
         if held:  # the record held (always kept: successes count it, not mid-air peaks, which fall back)
             self.held_best = max(self.held_best, raw[PROGRESS])
+        self.air = 0 if held else self.air + 1
         reward = (progress_reward(self._progress, raw[PROGRESS], best, 1.0 - raw[POT_CONTACT], **self.weights)
                   - self.time_penalty - self.action_cost * float(np.mean(a * a)))
         self._progress = raw[PROGRESS]
@@ -175,7 +177,7 @@ class GoiEnv(gym.Env):
         raw = self.client.load_state(state_id)
         self.best_progress = self.held_best = self._saved_best.get(state_id, raw[PROGRESS])
         self._progress = self._stall_mark = raw[PROGRESS]
-        self.stalled = 0  # a fresh try: the stuck signal mustn't carry over from whatever ran before
+        self.stalled = self.air = 0  # a fresh try: the stuck signal mustn't carry over from whatever ran before
         self._actions = deque([(0.0, 0.0)] * PREV_ACTIONS, maxlen=PREV_ACTIONS)
         return self._observe(raw)
 
@@ -241,7 +243,7 @@ if __name__ == "__main__":  # python -m goi_env.env: progress_reward's guarantee
                             action_cost=0.0, mouse=MOUSE, weights=dict(recovery=0, regress=0, air_bonus=0,
                                                                          speed_bonus=0),
                             held_records=held, _realtime=False, client=Steps(moves), best_progress=428.0,
-                            held_best=428.0, _progress=428.0, _stall_mark=428.0, stalled=0,
+                            held_best=428.0, _progress=428.0, _stall_mark=428.0, stalled=0, air=0,
                             _actions=deque([(0.0, 0.0)] * PREV_ACTIONS, maxlen=PREV_ACTIONS))
         return [env.step(np.zeros(2))[1] for _ in moves]
 
