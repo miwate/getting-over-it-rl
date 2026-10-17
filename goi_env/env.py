@@ -153,9 +153,10 @@ class GoiEnv(gym.Env):
         change (the smoke test's "rendering on vs off"), so a path found without rendering replays the same with it."""
         if self._proc:
             show_window(self._proc.pid, True)  # games without rendering start minimized (client.start)
-        self.client.configure(**{**self._config, "render": True, "width": width, "height": height})
         self.render_mode = "rgb_array"
-        for _ in range(100):  # the new window size takes a few frames (each frame() waits for one; no physics)
+        for k in range(100):  # the new window size takes a few frames (each frame() waits for one; no physics)
+            if k % 10 == 0:  # the window, restored from minimized, puts back its old size a few frames later: ask again
+                self.client.configure(**{**self._config, "render": True, "width": width, "height": height})
             if self.client.frame()[:2] == (width, height):
                 return
         raise RuntimeError(f"the game window didn't become {width}x{height}")
