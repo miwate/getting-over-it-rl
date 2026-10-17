@@ -10,5 +10,12 @@ runs/
 *.mp4
 plugin/GameDir.props
 
-# Markdown docs stay local for now
+# Markdown docs stay local for now, except the showcase README
 *.md
+!README.md
+
+# Hugging Face upload folder (models and video, built from runs/)
+goi-rl/
+
+# The README's screenshot tool (not part of the agent)
+scripts/readme_shots.py
