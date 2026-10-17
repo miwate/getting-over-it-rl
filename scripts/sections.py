@@ -1,7 +1,7 @@
 """Section map: where can a policy climb on its own? A winning climb path (climb.py) is replayed and the state where it
 enters each section of the route is kept; from there the policy plays alone (no save/load) for --seconds, --tries
-times. Per section: how often it reaches the next section, how far it gets on average, and how often it falls more
-than 5 below where it started.
+times. Per section: how often it reaches the next section (held: pot or hammer touching), how far it gets on
+average, and how often it falls more than 5 below where it started.
 
     python scripts/sections.py runs/rw-port/checkpoints/ppo_1500160_steps.zip --then 224:runs/bar-sil/checkpoints/ppo_7_steps.zip
 """
@@ -47,8 +47,8 @@ def run(units, args):
                 obs = game.load_state(state)
                 best = obs[PROGRESS]
                 for step in range(int(args.seconds * 30)):
-                    obs, _, terminated, _, _ = game.step(player(obs, step))
-                    best = max(best, obs[PROGRESS])
+                    obs, _, terminated, _, info = game.step(player(obs, step))
+                    best = max(best, info["held_best"])  # held (touching), not a mid-air peak
                     if best >= goal or obs[WON] > 0.5 or terminated:
                         break
                 out[i].append((float(best), float(obs[PROGRESS]), bool(obs[WON] > 0.5)))
@@ -68,14 +68,17 @@ def main():
     ap.add_argument("--seconds", type=float, default=90, help="game time per try")
     ap.add_argument("--games", type=int, default=8)
     ap.add_argument("--split", type=int, default=1, help="also start from this many points along each section")
+    ap.add_argument("--bounds", nargs="*", metavar="FROM:NAME", help="other sections than SECTIONS, by where each "
+                                                                      "starts, the last one the goal (e.g. 864:win)")
     ap.add_argument("--game-dir", default=os.environ.get("GOI_GAME_DIR"), help="install folder (or set GOI_GAME_DIR)")
     args = ap.parse_args()
     if not args.game_dir:
         ap.error("pass --game-dir or set GOI_GAME_DIR")
 
     units = []  # (index, start, goal, name)
-    for i in range(len(SECTIONS) - 1):
-        (lo, name), hi = SECTIONS[i], SECTIONS[i + 1][0]
+    sections = [(float(a), b) for a, b in (s.split(":", 1) for s in args.bounds)] if args.bounds else SECTIONS
+    for i in range(len(sections) - 1):
+        (lo, name), hi = sections[i], sections[i + 1][0]
         for k in range(args.split):
             units.append((len(units), lo + (hi - lo) * k / args.split, hi, name if k == 0 else ""))
     n = len(units)
@@ -95,7 +98,7 @@ def main():
         crossed = sum(b >= goal or w for b, _, w in tries)
         gain = np.mean([b - start for b, _, _ in tries])
         fell = sum(f < start - 5 for _, f, _ in tries)
-        print(f"{name:<20}{start:>6.0f}{goal:>6}{crossed:>5}/{len(tries):<4}{gain:>11.1f}{fell:>4}/{len(tries)}")
+        print(f"{name:<20}{start:>6.0f}{goal:>6.0f}{crossed:>5}/{len(tries):<4}{gain:>11.1f}{fell:>4}/{len(tries)}")
 
 
 if __name__ == "__main__":
