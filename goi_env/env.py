@@ -144,8 +144,7 @@ class GoiEnv(gym.Env):
 
     def render(self):
         if self.render_mode == "rgb_array":
-            width, height, rgb = self.client.frame()
-            return np.frombuffer(rgb, np.uint8).reshape(height, width, 3)
+            return np.ascontiguousarray(self.client.frame()[2])
         # "human": the game window draws itself
 
     def start_rendering(self, width=1280, height=720):

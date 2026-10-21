@@ -42,7 +42,10 @@ public class Plugin : BaseUnityPlugin
         SceneManager.sceneLoaded += (scene, _) => { if (scene.name == "Mian") game = new Game(); }; // before Start(): authored start pose
     }
 
-    // A frame can only be read once rendering has finished, so frame requests are answered at the end of the frame.
+    // A frame can only be read once rendering has finished, so frame requests are answered at the end of the frame. The
+    // screen is read into one reused RGB24 texture: a fresh RGBA screenshot texture per frame (ScreenCapture) cost an
+    // 8 MB allocation at 1080p, and the alpha the client then dropped.
+    Texture2D grab;
     IEnumerator AnswerFrameRequests()
     {
         var endOfFrame = new WaitForEndOfFrame();
@@ -50,9 +53,14 @@ public class Plugin : BaseUnityPlugin
         {
             yield return endOfFrame;
             if (!server.FramePending) continue;
-            var frame = ScreenCapture.CaptureScreenshotAsTexture();
-            server.SendFrame(frame);
-            Destroy(frame);
+            int w = Screen.width, h = Screen.height;
+            if (grab == null || grab.width != w || grab.height != h)
+            {
+                if (grab != null) Destroy(grab);
+                grab = new Texture2D(w, h, TextureFormat.RGB24, false);
+            }
+            grab.ReadPixels(new Rect(0, 0, w, h), 0, 0, false);
+            server.SendFrame(grab);
         }
     }
 

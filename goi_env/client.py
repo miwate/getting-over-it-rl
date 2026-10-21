@@ -15,6 +15,8 @@ from contextlib import contextmanager
 from ctypes import wintypes
 from pathlib import Path
 
+import numpy as np
+
 # Observation layout. The plugin appends n_rays distances from the pot to the terrain, counter-clockwise from +x.
 OBS_FIELDS = (
     "pot_x", "pot_y", "pot_vx", "pot_vy", "pot_angle", "pot_angvel",  # world units, radians
@@ -181,10 +183,13 @@ class GoiClient:
         self._call(b"d" + struct.pack("<i", state_id))
 
     def frame(self):
-        """The image rendered after the last step (needs render=True): width, height, RGB bytes with rows top-down."""
+        """The image rendered after the last step (needs render=True): width, height, and an RGB array (height, width,
+        3) with rows top-down (a view: the game sends the raw RGB24 bytes of the screen, rows bottom-up)."""
         data = self._call(b"f")
         width, height = struct.unpack_from("<ii", data)
-        return width, height, data[8:]
+        if len(data) != 8 + width * height * 3:
+            raise RuntimeError(f"a {width}x{height} frame of {len(data) - 8} bytes is not RGB24")
+        return width, height, np.frombuffer(data, np.uint8, offset=8).reshape(height, width, 3)[::-1]
 
     def close(self):
         """Quit the game and close the connection."""

@@ -3,6 +3,7 @@ using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using BepInEx.Logging;
+using Unity.Collections;
 using UnityEngine;
 
 // Lockstep protocol on 127.0.0.1, little-endian. A game serves one client session and quits when it ends, so a
@@ -130,25 +131,20 @@ class Server
         }
     }
 
-    // Called at the end of a frame while FramePending, with that frame's image.
+    // Called at the end of a frame while FramePending, with that frame's image (RGB24): its raw bytes, rows bottom-up as
+    // Unity keeps them (the client flips them), sent from one reused buffer. Converting pixel by pixel in managed code
+    // and allocating per frame held 1080p filming to ~22 frames a second.
+    byte[] frameBytes = new byte[0];
     public void SendFrame(Texture2D frame)
     {
         FramePending = false;
-        int w = frame.width, h = frame.height;
-        var px = frame.GetPixels32();
-        var data = new byte[12 + w * h * 3];
-        Put(data, 0, 8 + w * h * 3);
-        Put(data, 4, w);
-        Put(data, 8, h);
-        int o = 12;
-        for (int y = h - 1; y >= 0; y--) // Unity's rows run bottom-up
-            for (int x = y * w, end = x + w; x < end; x++)
-            {
-                data[o++] = px[x].r;
-                data[o++] = px[x].g;
-                data[o++] = px[x].b;
-            }
-        try { client.Send(data); }
+        var px = frame.GetRawTextureData<byte>();
+        if (frameBytes.Length != 12 + px.Length) frameBytes = new byte[12 + px.Length];
+        Put(frameBytes, 0, 8 + px.Length);
+        Put(frameBytes, 4, frame.width);
+        Put(frameBytes, 8, frame.height);
+        NativeArray<byte>.Copy(px, 0, frameBytes, 12, px.Length);
+        try { client.Send(frameBytes); }
         catch (Exception e) { EndSession(e); }
     }
 
