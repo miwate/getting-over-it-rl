@@ -3,6 +3,8 @@ marathon.py does, until it reaches --reach progress or wins (then --after more s
 got there, rendering goes on in that same game and its own moves are replayed from the start and filmed (replays are
 exact within a launch; across launches, long network games drift apart). Tries seeds until one gets there.
 With --start-states and --region, each try starts from an exported state at that stretch instead (as marathon.py).
+With --live, every try is filmed as it plays and only a try that gets there is kept: no replay that could part from
+the game (a 1080p replay parted at 2:16 from a game played beside three others).
 
     python scripts/play_film.py --reach 415 --out runs/marathon/to-chapel.mp4
     python scripts/play_film.py --reach 864 --start-states runs/climbs/win-e4-states.npz --region 745 755 --out x.mp4
@@ -15,7 +17,7 @@ import os
 import numpy as np
 import torch
 
-from film import film
+from film import film, mouse, video
 from goi_env import OBS_FIELDS, GoiEnv
 from train import STALL_SECONDS, chain as make_chain
 
@@ -25,7 +27,7 @@ PROGRESS, WON = OBS_FIELDS.index("progress"), OBS_FIELDS.index("won")
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--chain", default=os.path.join("runs", "chain.json"))
-    ap.add_argument("--reach", type=float, required=True, help="progress a game must reach to be filmed")
+    ap.add_argument("--reach", type=float, required=True, help="held progress a game must reach to be filmed")
     ap.add_argument("--after", type=float, default=10, help="seconds filmed after reaching it")
     ap.add_argument("--minutes", type=float, default=30, help="game time each try may take")
     ap.add_argument("--seeds", type=int, default=10, help="tries (seeds 0, 1, ...)")
@@ -35,6 +37,9 @@ def main():
     ap.add_argument("--start-states", nargs="*", default=[], help="exported state files (globs) to start from")
     ap.add_argument("--region", type=float, nargs=2, default=(-np.inf, np.inf), metavar=("LO", "HI"),
                     help="start from the states at this stretch of progress")
+    ap.add_argument("--give-up", type=float, nargs=2, metavar=("MIN", "PROGRESS"),
+                    help="end a try that hasn't held PROGRESS after MIN minutes (live tries are slow)")
+    ap.add_argument("--live", action="store_true", help="film each try as it plays (slower: every try renders)")
     ap.add_argument("--crf", type=int, default=16, help="x264 quality: lower is better and bigger (16: ~4 MB/s)")
     ap.add_argument("--game-dir", default=os.environ.get("GOI_GAME_DIR"), help="install folder (or set GOI_GAME_DIR)")
     args = ap.parse_args()
@@ -52,9 +57,12 @@ def main():
         torch.manual_seed(seed)
         player = make_chain(base, then, float(noise or 0.5))
         game = GoiEnv(args.game_dir, stall_steps=int(STALL_SECONDS * 30), stall_ends=False, record_reset=5)
-        actions, trace, reached = [], [], None
+        actions, trace, reached, held = [], [], None, 0.0
         obs, _ = game.reset()
-        start = None
+        start, writer = None, None
+        if args.live:
+            game.start_rendering(args.height * 16 // 9, args.height)
+            writer = video(args.out, args.crf)
         if pool:
             f, i = pool[np.random.default_rng(seed).integers(len(pool))]
             start = np.load(f)[f"s{i}"].tobytes()
@@ -63,17 +71,31 @@ def main():
             game.drop_state(sid)
         for step in range(int(args.minutes * 60 * 30)):
             a = np.asarray(player(obs, step), np.float32)
-            obs, *_ = game.step(a)
+            if writer:  # the picture before this move, its stroke drawn over it (as film() does)
+                writer.append_data(mouse(game.render(), np.array(actions[-20:] + [a]), min(step, 20)))
+            obs, _, _, _, info = game.step(a)
+            held = max(held, info["held_best"])  # touching, not a mid-air peak
             actions.append(a)
             trace.append(obs[PROGRESS])
-            if reached is None and (obs[PROGRESS] >= args.reach or obs[WON] > 0.5):
+            if reached is None and (held >= args.reach or obs[WON] > 0.5):
                 reached = step
             if reached is not None and step >= reached + args.after * 30:
                 break
+            if args.give_up and reached is None and step == int(args.give_up[0] * 1800) and held < args.give_up[1]:
+                break
         if reached is None:
-            print(f"seed {seed}: best {max(trace):.1f} in {args.minutes:.0f} min; next seed", flush=True)
+            print(f"seed {seed}: best held {held:.1f} in {args.minutes:.0f} min; next seed", flush=True)
+            if writer:
+                writer.close()
+                os.remove(args.out)
             game.close()
             continue
+        if writer:
+            writer.close()
+            game.close()
+            print(f"seed {seed}: reached {args.reach:.0f} at {reached / 1800:.1f} min; wrote {args.out}: "
+                  f"{len(actions) / 30:.0f} s, filmed live", flush=True)
+            return
         print(f"seed {seed}: reached {args.reach:.0f} at {reached / 1800:.1f} min; filming", flush=True)
         z = dict(try0=np.array(actions), trace=np.array(trace, np.float32), cuts0=np.array([0]),
                  climb0=np.zeros((0, 2), np.float32), reached=np.array([len(actions) - 1]))

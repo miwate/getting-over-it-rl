@@ -18,24 +18,35 @@ PROGRESS, WON = OBS_FIELDS.index("progress"), OBS_FIELDS.index("won")
 
 
 def mouse(frame, path, i):
-    """The frame with mouse input path[i] (and the 20 before it) drawn over its top-right corner, translucent."""
+    """The frame with mouse input path[i] (and the 20 before it) drawn over its top-right corner, translucent. Only the
+    widget's box is composited: the whole 1080p frame took 19 ms of a frame's 33."""
     h, w = frame.shape[:2]
-    r = h // 11
-    cx, cy = w - r - h // 25, r + h // 25
-    picture = Image.fromarray(frame).convert("RGBA")
+    r, pad = h // 11, h // 50
+    x0, y0, c = w - 2 * r - h // 25 - pad, h // 25 - pad, r + pad  # the box's corner, and the stick's centre in it
+    out = frame.copy()
+    box = out[y0:y0 + 2 * c, x0:x0 + 2 * c]
+    picture = Image.fromarray(box).convert("RGBA")
     layer = Image.new("RGBA", picture.size)
     d = ImageDraw.Draw(layer)
-    d.ellipse((cx - r, cy - r, cx + r, cy + r), fill=(0, 0, 0, 100), outline=(255, 255, 255, 150), width=2)
+    d.ellipse((c - r, c - r, c + r, c + r), fill=(0, 0, 0, 100), outline=(255, 255, 255, 150), width=2)
     trail = path[max(0, i - 20):i + 1]
     for k, (ax, ay) in enumerate(trail):
         a, dot = int(30 + 120 * (k + 1) / len(trail)), max(2, r // 25)
-        d.ellipse((cx + ax * r - dot, cy - ay * r - dot, cx + ax * r + dot, cy - ay * r + dot), fill=(255, 255, 255, a))
+        d.ellipse((c + ax * r - dot, c - ay * r - dot, c + ax * r + dot, c - ay * r + dot), fill=(255, 255, 255, a))
     ax, ay = path[i]
     dot = max(5, r // 7)
-    d.line((cx, cy, cx + ax * r, cy - ay * r), fill=(255, 255, 255, 220), width=max(3, r // 20))
-    d.ellipse((cx + ax * r - dot, cy - ay * r - dot, cx + ax * r + dot, cy - ay * r + dot), fill=(255, 255, 255, 240),
+    d.line((c, c, c + ax * r, c - ay * r), fill=(255, 255, 255, 220), width=max(3, r // 20))
+    d.ellipse((c + ax * r - dot, c - ay * r - dot, c + ax * r + dot, c - ay * r + dot), fill=(255, 255, 255, 240),
               outline=(0, 0, 0, 160), width=2)
-    return np.asarray(Image.alpha_composite(picture, layer).convert("RGB"))
+    box[:] = np.asarray(Image.alpha_composite(picture, layer).convert("RGB"))
+    return out
+
+
+def video(out, crf=16):
+    """An mp4 writer for 30 fps frames, encoded on the GPU."""
+    return imageio.get_writer(out, fps=30, codec="h264_nvenc", quality=None, pixelformat="yuv420p",
+                              macro_block_size=1,  # keep 1080 lines (the default stretches them to 1088)
+                              ffmpeg_params=["-rc", "vbr", "-cq", str(crf), "-b:v", "0", "-preset", "p5"])
 
 
 def film(game, z, out, crf=16, start=None):
@@ -50,8 +61,7 @@ def film(game, z, out, crf=16, start=None):
         obs = game.load_state(sid)
         game.drop_state(sid)
     first = float(obs[PROGRESS])
-    writer = imageio.get_writer(out, fps=30, codec="libx264", quality=None, pixelformat="yuv420p",
-                                ffmpeg_params=["-crf", str(crf), "-preset", "medium"])
+    writer = video(out, crf)
     parted = None
     try:
         for t in range(n + 1):
