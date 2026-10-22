@@ -44,3 +44,7 @@ circle in the top corner is the networks' mouse input.
 ## Models
 
 The networks and a video are on [Hugging Face](https://huggingface.co/miiwater/goi-rl).
+
+## License
+
+MIT. See [LICENSE](LICENSE).
