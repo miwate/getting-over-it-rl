@@ -72,15 +72,22 @@ def _one_game_starting():
             msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
 
 
-def start(game_dir, port=None, width=640, height=360, args=(), **config):
+def start(game_dir, port=None, width=640, height=360, args=(), headless=True, **config):
     """Launch the game in RL mode and connect to it; returns (process, client). Config as in GoiClient.configure;
     args are extra launch flags (e.g. "-goi-colliders").
+
+    Without rendering the game runs headless (Unity's -batchmode -nographics): no window and no graphics device. The
+    physics is the same: 300 steps from the start, and an exported state played on, match a windowed game exactly
+    (2026-10-24). headless=False keeps a (minimized) window, for a game that turns rendering on later.
 
     Games start one at a time, across all processes, until their level has loaded. A game quits when its client
     disconnects.
     """
     port = port or free_port()
     exe = Path(game_dir) / "GettingOverIt.exe"
+    headless = headless and not config.get("render")
+    if headless:
+        args = ("-batchmode", "-nographics", *args)
     with _one_game_starting():
         proc = subprocess.Popen([str(exe), "-goi-rl", "-goi-port", str(port), "-screen-fullscreen", "0",
                                  "-screen-width", str(width), "-screen-height", str(height), *args], cwd=game_dir)
@@ -89,7 +96,7 @@ def start(game_dir, port=None, width=640, height=360, args=(), **config):
         except BaseException:
             proc.kill()  # a game we launched but couldn't reach would never quit on its own
             raise
-    if not config.get("render"):
+    if not config.get("render") and not headless:
         show_window(proc.pid, False)
     return proc, client
 
@@ -253,7 +260,8 @@ def _smoke_test():
     if not args.no_launch and not args.game_dir:
         ap.error("pass --game-dir or set GOI_GAME_DIR")
 
-    proc, c = (None, GoiClient(port=args.port or 5555)) if args.no_launch else start(args.game_dir, args.port)
+    proc, c = (None, GoiClient(port=args.port or 5555)) if args.no_launch else start(args.game_dir, args.port,
+                                                                                         headless=False)
     try:
         obs = c.reset()
         print("reset:", {f: round(v, 3) for f, v in zip(OBS_FIELDS, obs)})

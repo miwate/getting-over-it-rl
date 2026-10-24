@@ -34,7 +34,7 @@ def climb(seed, args):
     torch.manual_seed(seed)
     rng = np.random.default_rng(seed)
     prior = chain(args.prior, parse_then(args.then), 0.0)
-    game = GoiEnv(args.game_dir, stall_steps=300, stall_ends=False, snake_ends=True)
+    game = GoiEnv(args.game_dir, stall_steps=300, stall_ends=False, snake_ends=True, headless=not args.video)
     out = f"{args.out}-{seed}.npz"
     path, trace, cuts, X, A, timeline = [], [], [], [], [], []
     history = []  # (state id, path length, progress) per decision, the last `keep`

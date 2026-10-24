@@ -56,7 +56,8 @@ def main():
     for seed in range(args.first_seed, args.first_seed + args.seeds):
         torch.manual_seed(seed)
         player = make_chain(base, then, float(noise or 0.5))
-        game = GoiEnv(args.game_dir, stall_steps=int(STALL_SECONDS * 30), stall_ends=False, record_reset=5)
+        game = GoiEnv(args.game_dir, stall_steps=int(STALL_SECONDS * 30), stall_ends=False, record_reset=5,
+                      headless=False)
         actions, trace, reached, held = [], [], None, 0.0
         obs, _ = game.reset()
         start, writer = None, None

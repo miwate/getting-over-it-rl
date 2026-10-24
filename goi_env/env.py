@@ -58,7 +58,7 @@ class GoiEnv(gym.Env):
 
     def __init__(self, game_dir=None, port=None, k=4, n_rays=32, ray_length=15.0, time_penalty=0.001, stall_steps=None,
                  stall_ends=True, snake_ends=False, action_cost=0.0, mouse=MOUSE, recovery=0.0, regress=0.0, air_bonus=0.0, speed_bonus=0.0,
-                 render_mode=None, realtime=True, width=640, height=360, game_args=(), head_rays=0, head_length=4.0,
+                 render_mode=None, realtime=True, width=640, height=360, game_args=(), headless=True, head_rays=0, head_length=4.0,
                  record_reset=None, held_records=False):
         """Launches the game from game_dir on a free port, or with game_dir=None connects to one already running on
         `port` (default 5555).
@@ -70,6 +70,8 @@ class GoiEnv(gym.Env):
         (how far below the record) then stays in the range the networks trained on: after falls from 230-290 to ~105
         it read ~125, and networks that climb from there 50/50 times froze for the rest of an hour.
         game_args: extra launch flags, e.g. ["-goi-colliders"] to draw the physics shapes over the game.
+        headless: without rendering, the game runs with no window or graphics device (client.start); False for a game
+            that will turn rendering on later (start_rendering).
         action_cost: subtracted from the reward times the mean squared action, so big mouse moves have to pay off.
         mouse: mouse input at action 1.
         recovery, regress, air_bonus, speed_bonus: progress_reward's weights.
@@ -91,7 +93,7 @@ class GoiEnv(gym.Env):
         self._config = config = dict(k=k, n_rays=n_rays, ray_length=ray_length, render=render_mode is not None,
                                      width=width, height=height, head_rays=head_rays, head_length=head_length)
         if game_dir:
-            self._proc, self.client = start(game_dir, port, args=game_args, **config)
+            self._proc, self.client = start(game_dir, port, args=game_args, headless=headless, **config)
         else:
             self._proc, self.client = None, GoiClient(port=port or 5555, **config)
         self.observation_space = spaces.Box(-np.inf, np.inf, (self.client.obs_size + 2 * PREV_ACTIONS + 2,), np.float32)
@@ -151,7 +153,8 @@ class GoiEnv(gym.Env):
         """Turn rendering on in a game launched without it: render() returns frames from then on. The physics doesn't
         change (the smoke test's "rendering on vs off"), so a path found without rendering replays the same with it."""
         if self._proc:
-            show_window(self._proc.pid, True)  # games without rendering start minimized (client.start)
+            if not show_window(self._proc.pid, True):  # games without rendering start minimized (client.start)
+                raise RuntimeError("this game was launched headless: GoiEnv(..., headless=False) to render later")
         self.render_mode = "rgb_array"
         for k in range(100):  # the new window size takes a few frames (each frame() waits for one; no physics)
             if k % 10 == 0:  # the window, restored from minimized, puts back its old size a few frames later: ask again
