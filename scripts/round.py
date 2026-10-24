@@ -71,6 +71,8 @@ def main():
     ap.add_argument("--from", dest="sources", nargs="+", help="warm-start the runs from these checkpoints in turn "
                                                                 "(default: the chain's network at the stretch's start)")
     ap.add_argument("--tries", type=int, default=10, help="arrival test: tries per state")
+    ap.add_argument("--marathon", action="store_true",
+                    help="end with a marathon from the bottom (off while the specialists train: few games get that far)")
     ap.add_argument("--extra", nargs=argparse.REMAINDER, default=[], help="more train.py arguments (e.g. --regress 1)")
     args = ap.parse_args()
     if not os.environ.get("GOI_GAME_DIR"):
@@ -140,7 +142,8 @@ def main():
         log(f"   chain: {lo:.0f} -> {best}")
     else:
         log("   chain unchanged")
-    marathon(f"m{n + 1}", chain)
+    if args.marathon:
+        marathon(f"m{n + 1}", chain)
     log(f"== round {args.name} done")
 
 
