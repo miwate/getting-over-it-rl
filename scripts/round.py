@@ -126,7 +126,9 @@ def main():
     for spec, (wins, gain) in scores.items():
         log(f"   {wins:3d} gain {gain:5.1f} {spec}")
     best = max(scores, key=scores.get) if scores else current
-    if best != current and scores[best] > scores.get(current, (-1, 0.0)):
+    # no successes, no install: anvil-boulder took 525 on gain alone (0 crossings) and played 0/80 onto the anvil
+    # where the network it replaced made 6/80 (gain rewards falling into the anvil's pit, which reads +2)
+    if best != current and scores[best] > scores.get(current, (-1, 0.0)) and scores[best][0] > 0:
         # the stretch's network owns all of it: entries inside it go (a 430 entry would take over mid-jump); whatever
         # played from hi on before goes on doing so (a narrow stretch inside a section keeps the section's network after)
         after = [spec for start, spec in chain if start <= hi][-1]
