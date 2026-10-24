@@ -198,10 +198,11 @@ class Starts(gym.Wrapper):
     def _p(stats):
         return (stats[:, 1] + 0.5) / (stats[:, 0] + 1)
 
-    @staticmethod
-    def _weights(stats):
+    def _weights(self, stats):
+        """(p(1-p))^2 plus a floor: 1e-4 by default practically never picks a start the agent fails from (p ~ 0), which
+        is where the anvil's launch was (538: 0% while mid-jump starts rose to 38%); --demo-priority 0.01 keeps them."""
         p = Starts._p(stats)
-        return (p * (1 - p)) ** 2 + 1e-4
+        return (p * (1 - p)) ** 2 + (1e-4 if self.demo_priority is True else self.demo_priority)
 
     def _open_stats(self):
         """(tries, successes, progress) per demo state: the rows of the shared demo_stats file if this game's demo
@@ -512,8 +513,9 @@ def main():
                     help="with --demo-window: only the demos' states in the window after they have been at this progress")
     ap.add_argument("--demo-curriculum", action="store_true",
                     help="with --demo-window: start near the stretch's end first, moving back as episodes succeed")
-    ap.add_argument("--demo-priority", action="store_true",
-                    help="with --demo-window: favor demo starts the agent crosses from only sometimes (weight p(1-p))")
+    ap.add_argument("--demo-priority", nargs="?", const=True, default=False, type=float, metavar="FLOOR",
+                    help="with --demo-window: favor demo starts the agent crosses from only sometimes (weight "
+                         "(p(1-p))^2 + FLOOR, FLOOR 1e-4 if not given)")
     ap.add_argument("--falls-terminal", action="store_true",
                     help="with --rewinds: a fall's cut ends the episode as a death, not a truncation the critic fills in")
     ap.add_argument("--airborne-falls", action="store_true",
