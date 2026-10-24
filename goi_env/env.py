@@ -252,3 +252,13 @@ if __name__ == "__main__":  # python -m goi_env.env: progress_reward's guarantee
     assert sum(rewards(fling, False)) == 10 and sum(rewards(fling, True)) == 0
     assert rewards(hook, True) == [0, 15, 3] and sum(rewards(hook, False)) == 18
     print("held records: ok")
+
+    from .client import dead_ends
+    obs = [0.0] * len(OBS_FIELDS)
+    X, Y = OBS_FIELDS.index("pot_x"), OBS_FIELDS.index("pot_y")
+    for x, y, p, want in [(72.5, 240.6, 539.2, 537.0),  # in the anvil's trough: the anvil top's progress
+                          (69.0, 244.2, 539.2, 539.2),  # beside the anvil, where win-e4 jumped from: as read
+                          (73.8, 248.8, 545.0, 545.0)]:  # on the cliff's ledge
+        obs[X], obs[Y], obs[PROGRESS] = x, y, p
+        assert dead_ends(tuple(obs))[PROGRESS] == want
+    print("dead ends: ok")

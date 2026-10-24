@@ -31,6 +31,21 @@ AHEAD = (1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 16, 18, 20, 25, 30, 35, 40, 45, 50)
 OBS_FIELDS += tuple(f"ahead{d}_{axis}" for d in AHEAD for axis in ("dx", "dy"))
 
 
+# Dead ends the level spline reads as headway, as (x0, x1, y0, y1, spline lo, hi, cap): progress there is capped. The
+# trough between the anvil's boulder and the cliff (x ~70-73, y ~240-242; the anvil top is 537 at y ~243-245) reads
+# 539.2: networks dropped in for +2.2 and sat there, never trying the jump from beside the anvil up to the cliff's ledge
+# (545 at (73.8, 248.8)). ponytail: one hand-measured box; goi_env.route (progress along a climbed path) if more appear.
+DEAD_ENDS = ((69.5, 75.0, 230.0, 243.0, 535.0, 541.0, 537.0),)
+_X, _Y, _P = (OBS_FIELDS.index(f) for f in ("pot_x", "pot_y", "progress"))
+
+
+def dead_ends(obs):
+    for x0, x1, y0, y1, lo, hi, cap in DEAD_ENDS:
+        if x0 < obs[_X] < x1 and y0 < obs[_Y] < y1 and lo < obs[_P] < hi:
+            return obs[:_P] + (min(obs[_P], cap),) + obs[_P + 1:]
+    return obs
+
+
 def free_port():
     """A localhost TCP port nothing is listening on right now (other software may own fixed ones)."""
     with socket.socket() as s:
@@ -219,7 +234,7 @@ class GoiClient:
             return None
         *obs, snake = self._obs.unpack(data)
         self.on_snake = snake > 0
-        return tuple(obs)
+        return dead_ends(tuple(obs))
 
     def _int(self, msg):
         return struct.unpack("<i", self._call(msg))[0]
