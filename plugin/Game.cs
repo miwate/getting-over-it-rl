@@ -24,6 +24,10 @@ class Game
     public int HeadRayCount;            // rays from the hammer head, after the pot's: what it can hook (0: none)
     public float HeadRayLength = 4f;
     public bool Render { get; private set; } = true;
+    public static bool Rendering;       // the same, for the plugin's patches: the bats fly in a game that films
+    public bool Stepped;                // this Unity frame ran a step: its sound belongs to the film
+    readonly List<float> sound = new List<float>();
+    bool soundStarted;
 
     readonly float dt = Time.fixedDeltaTime;
     readonly GameObject player;
@@ -153,6 +157,7 @@ class Game
     public void Step(Vector2 action)
     {
         restored = null;
+        Stepped = true;
         VirtualMouse.Input = Vector2.ClampMagnitude(action, 100f);
         for (int i = 0; i < K; i++)
         {
@@ -390,7 +395,61 @@ class Game
     {
         if (cameras == null) cameras = Camera.allCameras; // the level's cameras, all enabled at this point
         foreach (var c in cameras) if (c != null) c.enabled = on;
-        Render = on;
+        // Sound while it renders (films), rendered offline (AudioRenderer, as Unity's recorder does): the mix advances
+        // with the frames, one frame per step (captureFramerate), not with the wall clock, so it stays in sync with the
+        // pictures however fast filming runs. A game that only trains stays silent.
+        // The renderer hands out whole mixer blocks and drops the rest: at 1024-sample blocks a 1600-sample step came out
+        // as 1024, 2048, 1024, ... (4% of the sound lost, the sound drifting ahead). 64-sample blocks divide a step.
+        var audio = AudioSettings.GetConfiguration();
+        if (on && audio.dspBufferSize != 64)
+        {
+            audio.dspBufferSize = 64;
+            AudioSettings.Reset(audio);
+        }
+        if (on && !soundStarted) soundStarted = AudioRenderer.Start();
+        else if (!on && soundStarted) soundStarted = !AudioRenderer.Stop();
+        Render = Rendering = on;
+        AudioListener.volume = on ? 1 : 0;
+        AudioListener.pause = !on;
+        Time.captureFramerate = on ? Mathf.RoundToInt(1f / (K * dt)) : 0;
+        sound.Clear();
+    }
+
+    // At the end of every frame while rendering: that frame's sound, kept if the frame ran a step (a frame the client
+    // spent busy would put sound ahead of the pictures)
+    public void RecordSound()
+    {
+        int n = AudioRenderer.GetSampleCountForCaptureFrame() * SpeakerChannels();
+        if (n <= 0) return;
+        var buffer = new Unity.Collections.NativeArray<float>(n, Unity.Collections.Allocator.Temp);
+        AudioRenderer.Render(buffer);
+        if (Stepped) sound.AddRange(buffer);
+        buffer.Dispose();
+        Stepped = false;
+    }
+
+    static int SpeakerChannels()
+    {
+        switch (AudioSettings.speakerMode)
+        {
+            case AudioSpeakerMode.Mono: return 1;
+            case AudioSpeakerMode.Quad: return 4;
+            case AudioSpeakerMode.Surround: return 5;
+            case AudioSpeakerMode.Mode5point1: return 6;
+            case AudioSpeakerMode.Mode7point1: return 8;
+            default: return 2;
+        }
+    }
+
+    // the sound of the steps since the last call: int sample rate, int channels, float32 samples, interleaved
+    public byte[] TakeAudio()
+    {
+        var bytes = new byte[8 + 4 * sound.Count];
+        BitConverter.GetBytes(AudioSettings.outputSampleRate).CopyTo(bytes, 0);
+        BitConverter.GetBytes(SpeakerChannels()).CopyTo(bytes, 4);
+        Buffer.BlockCopy(sound.ToArray(), 0, bytes, 8, 4 * sound.Count);
+        sound.Clear();
+        return bytes;
     }
 
     Snapshot Capture()

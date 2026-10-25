@@ -52,6 +52,7 @@ public class Plugin : BaseUnityPlugin
         while (true)
         {
             yield return endOfFrame;
+            if (game != null && game.Render) game.RecordSound();
             if (!server.FramePending) continue;
             int w = Screen.width, h = Screen.height;
             if (grab == null || grab.width != w || grab.height != h)

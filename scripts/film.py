@@ -6,8 +6,11 @@ recorded progress.
 """
 import argparse
 import os
+import subprocess
+import wave
 
 import imageio.v2 as imageio
+import imageio_ffmpeg
 import numpy as np
 from PIL import Image, ImageDraw
 
@@ -42,11 +45,50 @@ def mouse(frame, path, i):
     return out
 
 
-def video(out, crf=16):
-    """An mp4 writer for 30 fps frames, encoded on the GPU."""
+def video(out, crf=16, game=None):
+    """An mp4 writer for 30 fps frames, encoded on the GPU; with the game the frames come from, with its sound."""
+    if game is not None:
+        return SoundVideo(out, crf, game)
     return imageio.get_writer(out, fps=30, codec="h264_nvenc", quality=None, pixelformat="yuv420p",
                               macro_block_size=1,  # keep 1080 lines (the default stretches them to 1088)
                               ffmpeg_params=["-rc", "vbr", "-cq", str(crf), "-b:v", "0", "-preset", "p5"])
+
+
+class SoundVideo:
+    """video() with the game's sound: the plugin renders the mix offline, one step's worth per frame (frame-exact
+    however fast filming runs), and each frame brings the sound of the steps since the last (client.audio); it is
+    muxed into the mp4 on close."""
+
+    def __init__(self, out, crf, game):
+        self.out, self.game, self.silent = out, game, out[:-4] + "-silent.mp4"
+        self.writer, self.pcm, self.frames, self.rate, self.channels = video(self.silent, crf), [], 0, 0, 0
+        game.client.audio()  # what played before filming
+
+    def append_data(self, frame):
+        self.writer.append_data(frame)
+        self.frames += 1
+        rate, channels, pcm = self.game.client.audio()
+        if pcm.size:
+            self.rate, self.channels = rate, channels
+            self.pcm.append(pcm)
+
+    def close(self):
+        self.writer.close()
+        if not self.frames:  # filming failed: its own error says why
+            return
+        if not self.pcm:
+            os.replace(self.silent, self.out)
+            return
+        wav = self.out[:-4] + ".wav"
+        with wave.open(wav, "wb") as w:
+            w.setnchannels(self.channels)
+            w.setsampwidth(2)
+            w.setframerate(self.rate)
+            w.writeframes((np.clip(np.concatenate(self.pcm), -1, 1) * 32767).astype("<i2").tobytes())
+        subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-loglevel", "error", "-i", self.silent, "-i", wav,
+                        "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-shortest", self.out], check=True)
+        os.remove(self.silent)
+        os.remove(wav)
 
 
 def film(game, z, out, crf=16, start=None):
@@ -61,7 +103,7 @@ def film(game, z, out, crf=16, start=None):
         obs = game.load_state(sid)
         game.drop_state(sid)
     first = float(obs[PROGRESS])
-    writer = video(out, crf)
+    writer = video(out, crf, game)
     parted = None
     try:
         for t in range(n + 1):

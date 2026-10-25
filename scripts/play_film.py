@@ -63,7 +63,7 @@ def main():
         start, writer = None, None
         if args.live:
             game.start_rendering(args.height * 16 // 9, args.height)
-            writer = video(args.out, args.crf)
+            writer = video(args.out, args.crf, game)
         if pool:
             f, i = pool[np.random.default_rng(seed).integers(len(pool))]
             start = np.load(f)[f"s{i}"].tobytes()

@@ -213,6 +213,13 @@ class GoiClient:
             raise RuntimeError(f"a {width}x{height} frame of {len(data) - 8} bytes is not RGB24")
         return width, height, np.frombuffer(data, np.uint8, offset=8).reshape(height, width, 3)[::-1]
 
+    def audio(self):
+        """The game's sound since the last call (it plays only while rendering): sample rate, channels, and float32
+        samples, interleaved."""
+        data = self._call(b"a")
+        rate, channels = struct.unpack_from("<ii", data)
+        return rate, channels, np.frombuffer(data, np.float32, offset=8)
+
     def close(self):
         """Quit the game and close the connection."""
         try:
