@@ -152,9 +152,23 @@ static class Patches
 
     // The chapel's bat flock and the gift's are visual (the Bat prefab has no collider or body), but once they have
     // flown, BatGen and OpenGift destroy their own objects, which have colliders (the gift a body too). A restore can't
-    // rebuild a destroyed physics object: the next load failed and the game quit. In RL mode they don't start.
+    // rebuild a destroyed physics object: the next load failed and the game quit. The chapel's flock flies in a game
+    // that renders (as in the original game), and its trigger object stays: it re-arms once the bats are gone, so a
+    // replay from before the chapel shows them again. A game that only trains never starts it. The gift's doesn't fly.
     [HarmonyPrefix, HarmonyPatch(typeof(BatGen), "OnTriggerEnter2D")]
-    static bool NoBats() => false;
+    static bool Bats() => Game.Rendering;
+
+    [HarmonyPrefix, HarmonyPatch(typeof(BatGen), "Update")]
+    static bool KeepBatGen(BatGen __instance, ref bool ___done, ref int ___batsSpawned)
+    {
+        if (___done && __instance.transform.childCount <= 1)
+        {
+            __instance.batCam.gameObject.SetActive(false);
+            ___done = false;
+            ___batsSpawned = 0;
+        }
+        return false;
+    }
 
     [HarmonyPrefix, HarmonyPatch(typeof(OpenGift), "OnCollisionEnter2D")]
     static bool NoGiftBats() => false;
