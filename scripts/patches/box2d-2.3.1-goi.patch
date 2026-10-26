@@ -1,0 +1,211 @@
+diff -ruN orig/Box2D/Common/b2Settings.cpp mod/Box2D/Common/b2Settings.cpp
+--- a/Box2D/Common/b2Settings.cpp
++++ b/Box2D/Common/b2Settings.cpp
+@@ -23,6 +23,23 @@
+ 
+ b2Version b2_version = {2, 3, 1};
+ 
++// goi: the tuning constants as globals so a host can mirror Unity's Physics2D settings.
++float32 b2_linearSlop = 0.005f;
++float32 b2_angularSlop = (2.0f / 180.0f * b2_pi);
++float32 b2_polygonRadius = (2.0f * b2_linearSlop);
++float32 b2_velocityThreshold = 1.0f;
++float32 b2_maxLinearCorrection = 0.2f;
++float32 b2_maxAngularCorrection = (8.0f / 180.0f * b2_pi);
++float32 b2_maxTranslation = 2.0f;
++float32 b2_maxRotation = (0.5f * b2_pi);
++float32 b2_baumgarte = 0.2f;
++float32 b2_toiBaugarte = 0.75f;
++float32 b2_timeToSleep = 0.5f;
++float32 b2_linearSleepTolerance = 0.01f;
++float32 b2_angularSleepTolerance = (2.0f / 180.0f * b2_pi);
++int32 b2_unityTOI = 0;
++int32 b2_frictionMix = 0;
++
+ // Memory allocators. Modify these to use your own allocator.
+ void* b2Alloc(int32 size)
+ {
+diff -ruN orig/Box2D/Common/b2Settings.h mod/Box2D/Common/b2Settings.h
+--- a/Box2D/Common/b2Settings.h
++++ b/Box2D/Common/b2Settings.h
+@@ -65,16 +65,16 @@
+ 
+ /// A small length used as a collision and constraint tolerance. Usually it is
+ /// chosen to be numerically significant, but visually insignificant.
+-#define b2_linearSlop			0.005f
++extern float32 b2_linearSlop; // goi: runtime-settable, stock 0.005f
+ 
+ /// A small angle used as a collision and constraint tolerance. Usually it is
+ /// chosen to be numerically significant, but visually insignificant.
+-#define b2_angularSlop			(2.0f / 180.0f * b2_pi)
++extern float32 b2_angularSlop; // goi: runtime-settable, stock (2.0f / 180.0f * b2_pi)
+ 
+ /// The radius of the polygon/edge shape skin. This should not be modified. Making
+ /// this smaller means polygons will have an insufficient buffer for continuous collision.
+ /// Making it larger may create artifacts for vertex collision.
+-#define b2_polygonRadius		(2.0f * b2_linearSlop)
++extern float32 b2_polygonRadius; // goi: runtime-settable, stock (2.0f * b2_linearSlop)
+ 
+ /// Maximum number of sub-steps per contact in continuous physics simulation.
+ #define b2_maxSubSteps			8
+@@ -87,43 +87,52 @@
+ 
+ /// A velocity threshold for elastic collisions. Any collision with a relative linear
+ /// velocity below this threshold will be treated as inelastic.
+-#define b2_velocityThreshold		1.0f
++extern float32 b2_velocityThreshold; // goi: runtime-settable, stock 1.0f
+ 
+ /// The maximum linear position correction used when solving constraints. This helps to
+ /// prevent overshoot.
+-#define b2_maxLinearCorrection		0.2f
++extern float32 b2_maxLinearCorrection; // goi: runtime-settable, stock 0.2f
+ 
+ /// The maximum angular position correction used when solving constraints. This helps to
+ /// prevent overshoot.
+-#define b2_maxAngularCorrection		(8.0f / 180.0f * b2_pi)
++extern float32 b2_maxAngularCorrection; // goi: runtime-settable, stock (8.0f / 180.0f * b2_pi)
+ 
+ /// The maximum linear velocity of a body. This limit is very large and is used
+ /// to prevent numerical problems. You shouldn't need to adjust this.
+-#define b2_maxTranslation			2.0f
++extern float32 b2_maxTranslation; // goi: runtime-settable, stock 2.0f
+ #define b2_maxTranslationSquared	(b2_maxTranslation * b2_maxTranslation)
+ 
+ /// The maximum angular velocity of a body. This limit is very large and is used
+ /// to prevent numerical problems. You shouldn't need to adjust this.
+-#define b2_maxRotation				(0.5f * b2_pi)
++extern float32 b2_maxRotation; // goi: runtime-settable, stock (0.5f * b2_pi)
+ #define b2_maxRotationSquared		(b2_maxRotation * b2_maxRotation)
+ 
+ /// This scale factor controls how fast overlap is resolved. Ideally this would be 1 so
+ /// that overlap is removed in one time step. However using values close to 1 often lead
+ /// to overshoot.
+-#define b2_baumgarte				0.2f
+-#define b2_toiBaugarte				0.75f
++extern float32 b2_baumgarte; // goi: runtime-settable, stock 0.2f
++extern float32 b2_toiBaugarte; // goi: runtime-settable, stock 0.75f
+ 
+ 
+ // Sleep
+ 
+ /// The time that a body must be still before it will go to sleep.
+-#define b2_timeToSleep				0.5f
++extern float32 b2_timeToSleep; // goi: runtime-settable, stock 0.5f
+ 
+ /// A body cannot sleep if its linear velocity is above this tolerance.
+-#define b2_linearSleepTolerance		0.01f
++extern float32 b2_linearSleepTolerance; // goi: runtime-settable, stock 0.01f
+ 
+ /// A body cannot sleep if its angular velocity is above this tolerance.
+-#define b2_angularSleepTolerance	(2.0f / 180.0f * b2_pi)
++extern float32 b2_angularSleepTolerance; // goi: runtime-settable, stock (2.0f / 180.0f * b2_pi)
++
++// goi: Unity Physics2D switches (stock 2.3.1 behaviour when 0).
++
++/// 0: TOI as stock (bullets, and any dynamic vs static/kinematic pair). 1: Unity's rule, TOI only
++/// for pairs where a body flagged continuous meets a static/kinematic body, or a bullet is involved.
++extern int32 b2_unityTOI;
++
++/// Friction mixing rule: 0 sqrt(f1*f2) (stock), 1 min, 2 max, 3 mean, 4 product.
++extern int32 b2_frictionMix;
+ 
+ // Memory Allocation
+ 
+diff -ruN orig/Box2D/Dynamics/Contacts/b2Contact.h mod/Box2D/Dynamics/Contacts/b2Contact.h
+--- a/Box2D/Dynamics/Contacts/b2Contact.h
++++ b/Box2D/Dynamics/Contacts/b2Contact.h
+@@ -36,7 +36,14 @@
+ /// For example, anything slides on ice.
+ inline float32 b2MixFriction(float32 friction1, float32 friction2)
+ {
+-	return b2Sqrt(friction1 * friction2);
++	switch (b2_frictionMix)
++	{
++	case 1: return friction1 < friction2 ? friction1 : friction2;
++	case 2: return friction1 > friction2 ? friction1 : friction2;
++	case 3: return 0.5f * (friction1 + friction2);
++	case 4: return friction1 * friction2;
++	default: return b2Sqrt(friction1 * friction2);
++	}
+ }
+ 
+ /// Restitution mixing law. The idea is allow for anything to bounce off an inelastic surface.
+diff -ruN orig/Box2D/Dynamics/b2Body.h mod/Box2D/Dynamics/b2Body.h
+--- a/Box2D/Dynamics/b2Body.h
++++ b/Box2D/Dynamics/b2Body.h
+@@ -311,6 +311,10 @@
+ 	/// Is this body treated like a bullet for continuous collision detection?
+ 	bool IsBullet() const;
+ 
++	/// goi: Unity's CollisionDetectionMode2D.Continuous. Only consulted when b2_unityTOI is set.
++	void SetContinuous(bool flag) { if (flag) m_flags |= e_continuousFlag; else m_flags &= ~e_continuousFlag; }
++	bool IsContinuous() const { return (m_flags & e_continuousFlag) == e_continuousFlag; }
++
+ 	/// You can disable sleeping on this body. If you disable sleeping, the
+ 	/// body will be woken.
+ 	void SetSleepingAllowed(bool flag);
+@@ -412,7 +416,8 @@
+ 		e_bulletFlag		= 0x0008,
+ 		e_fixedRotationFlag	= 0x0010,
+ 		e_activeFlag		= 0x0020,
+-		e_toiFlag			= 0x0040
++		e_toiFlag			= 0x0040,
++		e_continuousFlag	= 0x0080
+ 	};
+ 
+ 	b2Body(const b2BodyDef* bd, b2World* world);
+diff -ruN orig/Box2D/Dynamics/b2World.cpp mod/Box2D/Dynamics/b2World.cpp
+--- a/Box2D/Dynamics/b2World.cpp
++++ b/Box2D/Dynamics/b2World.cpp
+@@ -574,6 +574,25 @@
+ }
+ 
+ // Find TOI contacts and solve them.
++// goi: Unity's TOI pair rule. Bullets keep stock semantics; otherwise one side must be a
++// Continuous dynamic body and the other static or kinematic.
++static bool b2UnityTOIPair(const b2Body* a, const b2Body* b)
++{
++	if (a->IsBullet() || b->IsBullet())
++	{
++		return true;
++	}
++	if (b->GetType() != b2_dynamicBody)
++	{
++		return a->IsContinuous();
++	}
++	if (a->GetType() != b2_dynamicBody)
++	{
++		return b->IsContinuous();
++	}
++	return false;
++}
++
+ void b2World::SolveTOI(const b2TimeStep& step)
+ {
+ 	b2Island island(2 * b2_maxTOIContacts, b2_maxTOIContacts, 0, &m_stackAllocator, m_contactManager.m_contactListener);
+@@ -658,6 +677,12 @@
+ 					continue;
+ 				}
+ 
++				// goi: Unity skips TOI unless a Continuous body meets a static/kinematic one.
++				if (b2_unityTOI && b2UnityTOIPair(bA, bB) == false)
++				{
++					continue;
++				}
++
+ 				// Compute the TOI for this contact.
+ 				// Put the sweeps onto the same time interval.
+ 				float32 alpha0 = bA->m_sweep.alpha0;
+@@ -795,6 +820,12 @@
+ 					{
+ 						continue;
+ 					}
++
++					// goi: same pair rule as the candidate search.
++					if (b2_unityTOI && b2UnityTOIPair(body, other) == false)
++					{
++						continue;
++					}
+ 
+ 					// Skip sensors.
+ 					bool sensorA = contact->m_fixtureA->m_isSensor;
