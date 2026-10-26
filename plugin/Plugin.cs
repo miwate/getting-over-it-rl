@@ -15,11 +15,17 @@ public class Plugin : BaseUnityPlugin
 {
     // Launch flags. Without them the game plays normally apart from the 1 Hz log line.
     // -goi-rl: RL mode. Skips the menu, serves the bridge on 127.0.0.1 (-goi-port N, default 5555), steps physics
-    //          only on request, and never writes PlayerPrefs. -goi-dump: write engine-only data once per level load.
+    //          only on request, and never writes PlayerPrefs. -goi-connect N: dial a client listening on 127.0.0.1:N
+    //          instead (for clients in WSL); -goi-host A: dial address A too, alternating
+    //          with 127.0.0.1 (the WSL VM's own address, when WSL's localhost relay fails). -goi-dump: write engine-only data once per level load. -goi-native: at
+    //          the same moment, dump the native Box2D world (NativeBox2D) to BepInEx/goi-rl-native-start.jsonl.
     // -goi-colliders: draw the physics shapes over the game (see ColliderOverlay).
+    // -goi-ending: with -goi-rl, a win still ends the episode but the game's own ending runs too (credits, star field,
+    //          the float into space), for recording a finished climb. It deletes the save, as a real win does.
     static readonly string[] Args = Environment.GetCommandLineArgs();
     readonly bool rlMode = Args.Contains("-goi-rl");
     readonly bool dump = Args.Contains("-goi-dump");
+    readonly bool native = Args.Contains("-goi-native");
 
     Rigidbody2D pot;
     float nextLog, dumpAt = float.MaxValue;
@@ -32,12 +38,16 @@ public class Plugin : BaseUnityPlugin
         if (Args.Contains("-goi-colliders")) ColliderOverlay.Enable();
         if (!rlMode) return;
         Application.runInBackground = true; // off in the game's player settings, so unfocused instances would stall
+        AudioListener.volume = 0f; // RL games are always silent
+        AudioListener.pause = true;
         Patches.Log = Logger;
+        Patches.Ending = Args.Contains("-goi-ending");
         var harmony = Harmony.CreateAndPatchAll(typeof(Patches));
         harmony.PatchAll(typeof(VirtualMouse));
+        RecordHooks.Install(harmony, Logger); // the step recorder's event hooks (GameRecord.cs), each guarded
         int patched = harmony.GetPatchedMethods().Count();
         Logger.LogInfo($"RL mode: {patched} methods patched");
-        server = new Server(IntArg("-goi-port", 5555), Logger);
+        server = new Server(IntArg("-goi-port", 5555), Logger, IntArg("-goi-connect", 0), StrArg("-goi-host"));
         StartCoroutine(AnswerFrameRequests());
         SceneManager.sceneLoaded += (scene, _) => { if (scene.name == "Mian") game = new Game(); }; // before Start(): authored start pose
     }
@@ -81,10 +91,11 @@ public class Plugin : BaseUnityPlugin
             pot = player.GetComponent<Rigidbody2D>();
             dumpAt = Time.unscaledTime + 1f; // let every Start() run first
         }
-        if (dump && Time.unscaledTime >= dumpAt)
+        if ((dump || native) && Time.unscaledTime >= dumpAt)
         {
             dumpAt = float.MaxValue;
-            EngineDump.Write(Path.Combine(Paths.BepInExRootPath, "goi-rl-engine-dump.jsonl"), Logger);
+            if (dump) EngineDump.Write(Path.Combine(Paths.BepInExRootPath, "goi-rl-engine-dump.jsonl"), Logger);
+            if (native) NativeBox2D.Write(Path.Combine(Paths.BepInExRootPath, "goi-rl-native-start.jsonl"), Logger);
         }
         if (Time.unscaledTime < nextLog) return;
         nextLog = Time.unscaledTime + 1f;
@@ -100,6 +111,12 @@ public class Plugin : BaseUnityPlugin
         if (!ready) return;
         loader.DoStart(); // releases the pending "Mian" activation; unlike StartGame it doesn't delete the save
         menuSkipped = true;
+    }
+
+    static string StrArg(string name)
+    {
+        int i = Array.IndexOf(Args, name);
+        return i >= 0 && i + 1 < Args.Length ? Args[i + 1] : null;
     }
 
     static int IntArg(string name, int fallback)
@@ -129,7 +146,7 @@ static class VirtualMouse
 [HarmonyPatch]
 static class Patches
 {
-    public static bool Won;
+    public static bool Won, Ending;
     public static ManualLogSource Log;
     static readonly HashSet<string> blocked = new HashSet<string>();
 
@@ -173,13 +190,14 @@ static class Patches
     [HarmonyPrefix, HarmonyPatch(typeof(OpenGift), "OnCollisionEnter2D")]
     static bool NoGiftBats() => false;
 
-    // Leaving the space zone through the top rolls the credits and deletes the save. In RL mode it only ends the episode.
+    // Leaving the space zone through the top rolls the credits and deletes the save. In RL mode it only ends the episode,
+    // unless -goi-ending lets the game's ending run as well.
     [HarmonyPrefix, HarmonyPatch(typeof(GravityControl), "OnTriggerExit2D")]
     static bool Win(GravityControl __instance, Collider2D coll)
     {
         var rb = coll.attachedRigidbody;
         if (rb == null || rb.position.y <= __instance.GetComponent<BoxCollider2D>().bounds.max.y - 5f) return true;
         Won = true;
-        return false;
+        return Ending;
     }
 }
