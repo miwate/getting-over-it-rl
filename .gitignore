@@ -19,3 +19,13 @@ goi-rl/
 
 # The README's screenshot tool (not part of the agent)
 scripts/readme_shots.py
+
+# Upstream sources fetched by scripts/fetch_box2d.sh, and native builds
+third_party/
+build/
+
+# This machine's GPU sharing settings (scripts/cuda_run.sh sources it when present)
+scripts/gpu_env.local.sh
+# Frozen per-run copies of scripts/train_jax.py (a run's launcher must not change under it)
+scripts/train_jax_*.py
+*.orig
