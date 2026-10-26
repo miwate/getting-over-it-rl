@@ -12,7 +12,7 @@ using Object = UnityEngine.Object;
 // disabled so Unity stops calling their FixedUpdate, and Step() calls it instead, in the game's script execution
 // order, then simulates one physics step of the level's own physics world (see Restore). Unity still sends collision
 // callbacks to disabled scripts, so their contact bookkeeping keeps working. Replays from a snapshot are bit-exact.
-class Game
+partial class Game
 {
     // Route points observed, in distance along the route past the pot (AHEAD in goi_env/client.py): dense close by, sparser
     // far out. Linesight, the best Trackmania AI, sees 40 points of track ahead.
@@ -167,15 +167,26 @@ class Game
         VirtualMouse.Input = Vector2.ClampMagnitude(action, 100f);
         for (int i = 0; i < K; i++)
         {
+            if (i > 0) RecNextStep();                // 'W' (GameRecord.cs): one record per physics step
+            RecordPhase = 0;
+            RecScripts(0);                           // Rec*: the step recorder ('w', GameRecord.cs); no-ops otherwise
             hammerFixedUpdate();                     // execution order 0: friction materials from last step's contacts
             potFixedUpdate();
             controlFixedUpdate();                    // execution order 2000: moves the cursor by the mouse, motors toward it
+            RecScripts(1);
+            RecordPhase = 1;
             simTime += dt;
             crane.MovePosition(new Vector2(craneStart.x + Mathf.Sin(simTime) * 0.01f, craneStart.y)); // CraneMove, on sim time
+            RecNative(0);
+            RecordPhase = 2;
             if (!world.Simulate(dt)) throw new InvalidOperationException("PhysicsScene2D.Simulate did not run");
+            RecordPhase = 3;
+            RecNative(1);
+            NativeBox2D.AfterSimulate();             // a native dump asked for at this step ('n')
             if (lake.resetting) lake.CancelInvoke(); // fell in the lake: the flag ends the episode; the game's own reset must not fire
             foreach (var t in teleporters) Teleport(t);
             if (Render) cam.FixedUpdate();           // the camera follows on sim time
+            RecScripts(2);
         }
         // The character's arm pose, once per action in every mode, so rendering never changes the physics. It also puts the
         // hammer at the depth of the animated right hand, which follows frame time, and a moved Transform re-syncs the

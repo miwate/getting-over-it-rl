@@ -1,12 +1,14 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using BepInEx.Logging;
 using Unity.Collections;
 using UnityEngine;
 
-// Lockstep protocol on 127.0.0.1, little-endian. A game serves one client session and quits when it ends, so a
+// Lockstep protocol on 127.0.0.1, little-endian. With -goi-connect N the game dials 127.0.0.1:N instead of listening
+// (WSL2 forwards Windows' localhost to a listener in WSL, but not the other way round). A game serves one client session and quits when it ends, so a
 // crashed or interrupted trainer never leaves games running (and BepInEx allows only 5 per install).
 // Request: 1 command byte + fixed-size payload. Response: int32 byte count + payload (float32 obs, or int32s).
 // Every obs is followed by one float32 status: 1 while the pot touches the Snake (the chute back to the start).
@@ -16,14 +18,39 @@ using UnityEngine;
 //   'd' drop_state(int id) -> empty: frees a saved state
 //   'p' place(float along, float dx, float lift, float angle) -> obs, or empty if the climber overlaps the level there
 //   'e' dump_engine(int tag) -> empty: the engine's live state to BepInEx/goi-rl-engine-state-<tag>.jsonl (debugging)
+//   'n' dump_native(int tag, int afterStep) -> empty: the native Box2D world to BepInEx/goi-rl-native-<tag>.jsonl, now
+//       or (afterStep 1) right after the next physics step's Simulate; a negative tag also searches memory for where
+//       the engine settings live (NativeBox2D.ScanSettings: slow, and touches settings)
+//   'q' controller -> UTF-8 JSON: the 'controller' row (EngineDump.Controller): deadzone, sensitivity, trackpad, epsilons,
+//       the mouse/trackpad/stick AnimationCurves (keys with tangents, weights, wrap modes, plus Unity's own Evaluate on
+//       grids), the hammer's and pot's static/sliding PhysicsMaterial2D, PlayerControl's cached motor/slider structs,
+//       the scripts' thresholds and buffer sizes, the code literals, a Mono float-evaluation probe, and the names of the
+//       recorder's script-state fields
+//   'w' record_step(float mouseX, float mouseY) -> one step at K = 1 as Step does it, returned as a binary record
+//       (Game.Record, GameRecord.cs): script state before / after the controller / after the step, the native world
+//       (bodies, joints, contacts with manifolds and impulses) right before and right after Simulate, and the events
+//       between (cursor MovePosition targets, collision callbacks in Unity's order, HammerReturn). Decoder:
+//       goi_jax/parity/states.py. Typically 10-40 KB and a few ms.
+//   'W' record_action(float mouseX, float mouseY) -> one action at the configured K as Step runs it: int32 K, then K
+//       records (int32 bytes + a record as 'w' returns it), one per physics step; the pose update and joint
+//       re-creation happen once, after the last step (whose record also holds the Transforms after it, TFM3)
+//   'g' geometry -> binary: every fixture of the current world (static pieces included) with its shape, plus the
+//       collider/body/joint index tables records refer to (once per session: static pieces never change)
+//   'u' route -> UTF-8 JSON (GameRoute.cs): LevelSpline's segments (approximation cache, distances, interpolation
+//       points), the lake / Snake / space-zone colliders, ray layers, and probes of the game's own spline queries
+//   'o' observe -> obs of the current state without stepping (after a record_step, the obs a step would have returned)
 //   'f' frame -> int width, int height, then RGB rows top-down: the image rendered after the last step (render on)
-//   'o' props(int on) -> int obs length: Game.PropFields more after the rays (the nearest loose prop), off by default
+//   'b' props(int on) -> int obs length: Game.PropFields more after the rays (the nearest loose prop), off by default
 //   'a' audio -> int sample rate, int channels, then float32 samples: the sound played since the last 'a' (render on)
 //   'x' export_state(int id) -> the saved state as bytes (empty for an unknown id), loadable in any other game
 //   'i' import_state(int n, then n bytes) -> int id of a new saved state, or -1 if it doesn't fit this level/plugin
 class Server
 {
     readonly TcpListener listener;
+    readonly int connectPort;
+    readonly IPAddress[] dialHosts; // tried in turn: 127.0.0.1 (WSL's localhost relay), then -goi-host (the WSL VM itself)
+    int dialAttempt;
+    float nextDial;
     readonly ManualLogSource log;
     readonly byte[] input = new byte[32];
     readonly byte[] output = new byte[4 + 4 * 256];
@@ -32,12 +59,43 @@ class Server
 
     public bool FramePending { get; private set; }
 
-    public Server(int port, ManualLogSource log)
+    public Server(int port, ManualLogSource log, int connectPort = 0, string host = null)
     {
         this.log = log;
+        this.connectPort = connectPort;
+        if (connectPort > 0)
+        {
+            // WSL2's localhost relay sometimes stops forwarding new ports (a launch then never connected in 180 s);
+            // the WSL VM's own address doesn't depend on it.
+            dialHosts = IPAddress.TryParse(host ?? "", out var extra) ? new[] { IPAddress.Loopback, extra } : new[] { IPAddress.Loopback };
+            log.LogInfo($"bridge will dial {string.Join(", ", dialHosts.Select(h => h.ToString()).ToArray())} port {connectPort}");
+            return;
+        }
         listener = new TcpListener(IPAddress.Loopback, port);
         listener.Start();
         log.LogInfo($"bridge listening on 127.0.0.1:{port}");
+    }
+
+    // Reverse mode: one connection attempt per half second until the client's listener answers.
+    Socket Dial()
+    {
+        if (Time.realtimeSinceStartup < nextDial) return null;
+        nextDial = Time.realtimeSinceStartup + 0.5f;
+        var host = dialHosts[dialAttempt++ % dialHosts.Length];
+        var s = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        try
+        {
+            var pending = s.BeginConnect(host, connectPort, null, null);
+            if (pending.AsyncWaitHandle.WaitOne(400) && s.Connected)
+            {
+                s.EndConnect(pending);
+                log.LogInfo($"bridge connected to {host}:{connectPort} (attempt {dialAttempt})");
+                return s;
+            }
+        }
+        catch (SocketException) { }
+        s.Close();
+        return null;
     }
 
     // Called every frame once the level is ready. Serves commands for up to 50 ms, then hands the frame back to
@@ -46,8 +104,12 @@ class Server
     {
         if (client == null)
         {
-            if (!listener.Pending()) return;
-            client = listener.AcceptSocket();
+            if (listener != null)
+            {
+                if (!listener.Pending()) return;
+                client = listener.AcceptSocket();
+            }
+            else if ((client = Dial()) == null) return;
             client.NoDelay = true;
         }
         if (FramePending) return; // answered by SendFrame once this frame has been rendered
@@ -72,7 +134,7 @@ class Server
                         game.HeadRayLength = Mathf.Max(Float(28), 0.01f);
                         SendInt(game.ObsLength);
                         break;
-                    case 'o':
+                    case 'b':
                         Read(4);
                         game.Props = Int(0) != 0;
                         SendInt(game.ObsLength);
@@ -104,6 +166,33 @@ class Server
                         Read(4);
                         EngineDump.Write(Path.Combine(BepInEx.Paths.BepInExRootPath, $"goi-rl-engine-state-{Int(0)}.jsonl"), log);
                         Send(0);
+                        break;
+                    case 'n':
+                        Read(8);
+                        var native = Path.Combine(BepInEx.Paths.BepInExRootPath, $"goi-rl-native-{Int(0)}.jsonl");
+                        if (Int(4) != 0) NativeBox2D.WriteAfterNextStep(native, log);
+                        else NativeBox2D.Write(native, log, Int(0) < 0);
+                        Send(0);
+                        break;
+                    case 'q':
+                        SendBytes(System.Text.Encoding.UTF8.GetBytes(game.ControllerJson()));
+                        break;
+                    case 'w':
+                        Read(8);
+                        SendBytes(game.Record(new Vector2(Float(0), Float(4))));
+                        break;
+                    case 'W':
+                        Read(8);
+                        SendBytes(game.RecordAction(new Vector2(Float(0), Float(4))));
+                        break;
+                    case 'g':
+                        SendBytes(game.Geometry());
+                        break;
+                    case 'u':
+                        SendBytes(System.Text.Encoding.UTF8.GetBytes(game.RouteJson()));
+                        break;
+                    case 'o':
+                        SendObs(game); // no step: the observation of the current state (Progress's guard moves on as at a step)
                         break;
                     case 'd':
                         Read(4);
