@@ -10,7 +10,7 @@ One network by
 [@krzim](https://github.com/krzim), trained only in a JAX re-implementation of the game built on this repo's plugin,
 plays the real *Getting Over It with Bennett Foddy* from the bottom to the top with no save/load. It won 17 of 20
 climbs in krzim's test. Above, 30 s of one of its wins recorded here, from the anvil to the radio mast; the whole
-climb took 2 min 34 s ([full video](https://huggingface.co/miiwater/goi-rl/blob/main/videos/krzim-network-wins.mp4)).
+climb took 1 min 35 s ([full video](https://huggingface.co/miiwater/goi-rl/blob/main/videos/krzim-network-wins.mp4)).
 The circle in the corner is the network's mouse input.
 
 ## How it works
