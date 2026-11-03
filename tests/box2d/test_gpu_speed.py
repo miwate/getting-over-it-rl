@@ -113,6 +113,7 @@ def test_sorted_lanes_culled_scan_game():
     root = Path(__file__).resolve().parents[2] / "dumps" / "parity"
     if not (root / "index.json").exists():
         pytest.skip("no recordings")
+    pytest.importorskip("goi_jax.game", reason="the game env is in krzim's fork")
     from goi_jax.box2d import pairs as XP
     from goi_jax.box2d.gpu import kernel as K
     from goi_jax.box2d.gpu import pairs as GP
