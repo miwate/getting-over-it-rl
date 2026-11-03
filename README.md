@@ -1,10 +1,12 @@
 # Getting Over It, played by reinforcement learning
 
+**The first reinforcement learning agent to finish the whole game in one continuous run.**
+
 <p align="center">
   <img src="media/climb.gif" width="480" alt="The network jumping from the anvil, swinging on the bucket and climbing the ice, its mouse input in the corner">
 </p>
 
-**The first reinforcement learning agent to finish the whole game in one continuous run.** One network by
+One network by
 [@krzim](https://github.com/krzim), trained only in a JAX re-implementation of the game built on this repo's plugin,
 plays the real *Getting Over It with Bennett Foddy* from the bottom to the top with no save/load. It won 17 of 20
 climbs in krzim's test. Above, 30 s of one of its wins recorded here, from the anvil to the radio mast; the whole
