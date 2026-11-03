@@ -38,7 +38,7 @@ public class Plugin : BaseUnityPlugin
         if (Args.Contains("-goi-colliders")) ColliderOverlay.Enable();
         if (!rlMode) return;
         Application.runInBackground = true; // off in the game's player settings, so unfocused instances would stall
-        AudioListener.volume = 0f; // RL games are always silent
+        AudioListener.volume = 0f; // RL games start silent; rendering for a film turns the sound on (Game.SetRender)
         AudioListener.pause = true;
         Patches.Log = Logger;
         Patches.Ending = Args.Contains("-goi-ending");
