@@ -13,6 +13,12 @@ train = [
     "tensorboard>=2.21.0",
     "torch>=2.14.0",
 ]
+# The Box2D port in JAX (goi_jax/box2d) and its tests (tests/box2d), in WSL or Linux (jax 0.12 needs Python 3.12+).
+# For NVIDIA GPUs install jax[cuda13]==0.12.0.
+jax = [
+    "jax==0.12.0; python_version >= '3.12'",
+    "pytest>=8",
+]
 
 # PyPI's Windows torch wheels are CPU-only. The CUDA 13.0 build trains the big policy (--net big --device cuda) ~10x
 # faster than the CPU, and still runs everything on the CPU without a GPU.
