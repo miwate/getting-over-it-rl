@@ -368,8 +368,11 @@ class Player:
         with open(vecnormalize_path(checkpoint), "rb") as f:
             self.norm = pickle.load(f)
         self.noise = noise
+        self.inputs = self.model.observation_space.shape[0]
 
     def __call__(self, obs, step):
+        if len(obs) > self.inputs:  # a network from before the game's newer fields (props): without them
+            obs = narrow(obs, len(obs) - self.inputs)
         return act(self.model, self.norm.normalize_obs(obs[None]), step, self.noise)[0]
 
 
@@ -421,6 +424,12 @@ def widen(x, extra, axis):
     return lib.cat([head, pad, x[tuple(cut)]], axis) if lib is torch else np.concatenate([head, pad, x[tuple(cut)]], axis)
 
 
+def narrow(x, extra):
+    """widen's inverse on the last axis: without the `extra` bridge fields before GoiEnv's own last ones."""
+    at = x.shape[-1] - (2 * PREV_ACTIONS + 2)
+    return np.concatenate([x[..., :at - extra], x[..., at:]], -1)
+
+
 def load_norm(checkpoint, venv):
     """A checkpoint's observation normalization for `venv`, widened (mean 0, var 1) if venv has new inputs."""
     with open(vecnormalize_path(checkpoint), "rb") as f:
@@ -434,9 +443,10 @@ def load_norm(checkpoint, venv):
     return norm
 
 
-def warm_start(model, checkpoint, extra=0):
+def warm_start(model, checkpoint):
     """Copy a checkpoint's weights into a new model, where they fit: a bounded mean nests the mean layer as action_net.0,
-    and gSDE's noise matrix doesn't match a plain Gaussian's log_std (it starts fresh)."""
+    gSDE's noise matrix doesn't match a plain Gaussian's log_std (it starts fresh), and a first layer gets zero weights
+    on observation fields the checkpoint didn't have (head rays, props): the same behavior to start from."""
     new = model.policy.state_dict()
     nested = "action_net.0.weight" in new
     loaded = {}
@@ -445,8 +455,8 @@ def warm_start(model, checkpoint, extra=0):
             k = "action_net." + ("0." if nested else "") + k.split(".")[-1]
         if k in new and new[k].shape == v.shape:
             loaded[k] = v
-        elif k in new and new[k].shape[1:] == (v.shape[1] + extra,) and new[k].shape[0] == v.shape[0] and extra:
-            loaded[k] = widen(v, extra, 1)  # a first layer: zero weights on the new inputs keep its behavior
+        elif k in new and v.dim() == 2 and new[k].shape[0] == v.shape[0] and new[k].shape[1] > v.shape[1]:
+            loaded[k] = widen(v, new[k].shape[1] - v.shape[1], 1)  # a first layer: zero weights on the new inputs
     model.policy.load_state_dict({**new, **loaded})
     print(f"warm start from {checkpoint}: {len(loaded)} of {len(new)} tensors; fresh: {sorted(set(new) - set(loaded))}")
 
@@ -543,6 +553,8 @@ def main():
                          "so a warm start keeps its behavior with more room to learn (policy.GrownPolicy, bounded mean)")
     ap.add_argument("--collector", choices=("lockstep", "async"), default="lockstep",
                     help="async: each game steps at its own pace in its own worker (collector.py); several times faster")
+    ap.add_argument("--overlap", action="store_true",
+                    help="async: the games play the next rollout while PPO updates (data one update old)")
     ap.add_argument("--device", default="cpu", help="where the network trains: cpu (fastest for the small net) or cuda")
     ap.add_argument("--ent-coef", type=float, default=0.0, help="entropy bonus")
     ap.add_argument("--action-cost", type=float, default=0.0, help="reward cost per step of the mean squared action")
@@ -613,7 +625,7 @@ def main():
                         target_kl=args.target_kl, ent_coef=args.ent_coef, **exploration, policy_kwargs=policy_kwargs,
                         device=args.device, tensorboard_log=run_dir, verbose=1)
             if args.warm_start:
-                warm_start(model, args.warm_start, args.head_rays)
+                warm_start(model, args.warm_start)
                 if args.fresh_noise:
                     with torch.no_grad():
                         model.policy.log_std.fill_(policy_kwargs.get("log_std_init", 0.0))
@@ -626,7 +638,7 @@ def main():
         try:
             if collector:
                 collector.learn(model, venv, args.steps, args.save_every, checkpoints, save_checkpoint,
-                                reset_num_timesteps=not args.resume)
+                                reset_num_timesteps=not args.resume, overlap=args.overlap)
             else:
                 model.learn(args.steps, callback=[save, ProgressLog()], tb_log_name="tb",
                             reset_num_timesteps=not args.resume)
