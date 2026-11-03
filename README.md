@@ -1,63 +1,33 @@
 # Getting Over It, played by reinforcement learning
 
 <p align="center">
-  <img src="media/climb.gif" width="480" alt="The networks climbing through the boxes and the furniture">
+  <img src="media/win.gif" width="480" alt="The network floating through space to the top of the game, its mouse input in the corner">
 </p>
 
-Neural networks playing the real *Getting Over It with Bennett Foddy*, with one goal: be the first to finish it with
-reinforcement learning, in one continuous climb from the bottom to the top with no save/load.
-
-**Best run so far: 63% of the way to the top**, in one continuous game from the bottom.
-
-## Progress by part
-
-The climb split into the parts speedrunners use. The project's own cuts are finer: 28 networks, each trained on its
-own stretch of the route, so one part can hold several (the small print: the part's route progress, 0 at the bottom
-and 864 at the top, and the project's stretches inside it). The progress is measured from the bottom: of 64
-continuous games (an hour each, falls and re-climbs included), how many of those that reached the part got through
-it (**Solved** from 90%). A dash: no game has reached it yet.
-
-The circle in the top corner of each picture is the networks' mouse input.
-
-| Part | Progress | |
-|---|---|---|
-| **Coffee Rock**<br><sub>9–176: lakeside, rocks, tree and slope (2 networks)</sub> | Solved<br><sub>64 of 64</sub> | <img src="media/parts/01-coffee-rock.jpg" width="320" alt="Coffee Rock"> |
-| **The Devil's Chimney**<br><sub>176–204: chimney (1 network)</sub> | Solved<br><sub>64 of 64</sub> | <img src="media/parts/02-the-devil-s-chimney.jpg" width="320" alt="The Devil's Chimney"> |
-| **Construction Wall**<br><sub>204–245: Construction Wall, girder (3 networks)</sub> | Solved<br><sub>64 of 64</sub> | <img src="media/parts/03-construction-wall.jpg" width="320" alt="Construction Wall"> |
-| **Slide Skip**<br><sub>245–310: hut, garden, playground (3 networks)</sub> | Solved<br><sub>63 of 64</sub> | <img src="media/parts/04-slide-skip.jpg" width="320" alt="Slide Skip"> |
-| **Furniture Land**<br><sub>310–385: boxes, furniture (2 networks)</sub> | Solved<br><sub>63 of 63</sub> | <img src="media/parts/05-furniture-land.jpg" width="320" alt="Furniture Land"> |
-| **Orange Hell**<br><sub>385–440: orange stretch, chapel foot, chapel jump (3 networks)</sub> | 68%<br><sub>43 of 63</sub> | <img src="media/parts/06-orange-hell.jpg" width="320" alt="Orange Hell"> |
-| **Bell Tower**<br><sub>440–470: chapel top (3 networks)</sub> | 53%<br><sub>23 of 43</sub> | <img src="media/parts/07-bell-tower.jpg" width="320" alt="Bell Tower"> |
-| **The Hat**<br><sub>470–530: roofs (1 network)</sub> | 35%<br><sub>8 of 23</sub> | <img src="media/parts/08-the-hat.jpg" width="320" alt="The Hat"> |
-| **The Anvil**<br><sub>530–560: anvil boulder, anvil jump, cliff (3 networks)</sub> | 0%<br><sub>0 of 8</sub> | <img src="media/parts/09-the-anvil.jpg" width="320" alt="The Anvil"> |
-| **Floating Platforms**<br><sub>560–628: snowballs (3 networks)</sub> | – | <img src="media/parts/10-floating-platforms.jpg" width="320" alt="Floating Platforms"> |
-| **The Bucket**<br><sub>628–660: bucket (5 networks)</sub> | – | <img src="media/parts/11-the-bucket.jpg" width="320" alt="The Bucket"> |
-| **Mountain Climb**<br><sub>660–726: Ice Mountain (2 networks)</sub> | – | <img src="media/parts/12-mountain-climb.jpg" width="320" alt="Mountain Climb"> |
-| **Satellite Climb**<br><sub>726–760: ice platform, radio mast (3 networks)</sub> | – | <img src="media/parts/13-satellite-climb.jpg" width="320" alt="Satellite Climb"> |
-| **Space**<br><sub>760–864: space (1 network)</sub> | – | <img src="media/parts/14-space.jpg" width="320" alt="Space"> |
+**The first reinforcement learning agent to finish the whole game in one continuous run.** One network by
+[@krzim](https://github.com/krzim), trained only in a JAX re-implementation of the game built on this repo's plugin,
+plays the real *Getting Over It with Bennett Foddy* from the bottom to the top with no save/load. It won 17 of 20
+climbs in krzim's test; the run above, recorded here, took 2 min 34 s
+([full video](https://huggingface.co/miiwater/goi-rl/blob/main/videos/krzim-network-wins.mp4)). The circle in the
+corner is the network's mouse input.
 
 ## How it works
 
 - A C# plugin (BepInEx) runs inside the game and connects it to Python: physics advances in lockstep with the agent,
   and the whole game can be saved and restored exactly.
-- PPO networks (Stable-Baselines3) train on 10 copies of the game at once, about 6,000 steps per second on one PC.
-- A search with save/load found climbs through every part. Their states start the training of 28 networks, each
-  specialized in one stretch of the route and chained along it.
-- Continuous games from the bottom show where the networks get stuck, and those spots get targeted training.
-
-## Box2D in JAX
-
-[krzim](https://github.com/krzim) contributed a re-implementation of the game's physics engine (Box2D 2.3.1, as Unity
-runs it) in JAX, batched over thousands of worlds on a GPU (`goi_jax/box2d`, with Box2D's
-[license notice](goi_jax/box2d/LICENSE-Box2D.txt)), and plugin commands to record the game step by step and read its
-native physics world. The game rules and the trainer built on it stay in
-[krzim's fork](https://github.com/krzim/getting-over-it-rl/tree/jax-engine): with them, krzim reports one network,
-trained only in the simulator, that finishes the real game in 17 of 20 climbs from the bottom
-([model and logs](https://huggingface.co/zimmerk4/getting-over-it-rl-jax)).
+- krzim re-implemented the game's physics engine (Box2D 2.3.1, as Unity runs it) in JAX, batched over thousands of
+  worlds on a GPU, and checked it against step-by-step recordings of the real game made through the plugin. The
+  physics port is in this repo (`goi_jax/box2d`, with Box2D's [license notice](goi_jax/box2d/LICENSE-Box2D.txt)).
+  The game rules and the trainer built on it are in
+  [krzim's fork](https://github.com/krzim/getting-over-it-rl/tree/jax-engine), and the winning network with the logs
+  of its 20 climbs is on [krzim's Hugging Face](https://huggingface.co/zimmerk4/getting-over-it-rl-jax).
+- This repo's own networks train in the real game: PPO (Stable-Baselines3) on 10 copies at once, 28 networks each
+  specialized in one stretch of the route and chained along it, started from states a save/load search found. Their
+  best continuous game from the bottom reached 63% of the way to the top.
 
 ## Models
 
-The networks and a video are on [Hugging Face](https://huggingface.co/miiwater/goi-rl).
+This repo's networks and videos are on [Hugging Face](https://huggingface.co/miiwater/goi-rl).
 
 ## License
 
