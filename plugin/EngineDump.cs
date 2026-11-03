@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using BepInEx.Logging;
+using HarmonyLib;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
@@ -32,6 +33,54 @@ static class EngineDump
             .F("runInBackground", Application.runInBackground).F("targetFrameRate", Application.targetFrameRate)
             .F("vSyncCount", QualitySettings.vSyncCount).F("qualityLevel", QualitySettings.GetQualityLevel())
             .F("screen", $"{Screen.width}x{Screen.height} fullscreen={Screen.fullScreen}").End();
+
+        // The player controller's scene values a simulation of it needs (PlayerControl, HammerCollisions, PotSounds): the
+        // mouse acceleration curve sampled every 0.05 of input up to 25, the dead zone and epsilons, the cursor body,
+        // both friction materials (stuck / sliding) of the hammer's head and the pot's bottom, where the two friction
+        // scripts sit (which collisions they hear) and the layer whose collisions they count.
+        var cols = All<Collider2D>(scene).ToList(); // the collider rows below, in order
+        var control = Object.FindObjectOfType<PlayerControl>();
+        if (control != null)
+        {
+            var t = Traverse.Create(control);
+            var hc = Object.FindObjectOfType<HammerCollisions>();
+            var ps = Object.FindObjectOfType<PotSounds>();
+            new Json(sb, "controller").F("deadzone", control.deadzone).F("trackpad", control.trackpad)
+                .F("mouseSensitivity", t.Field("mouseSensitivity").GetValue<float>())
+                .F("posEpsilon", t.Field("posEpsilon").GetValue<float>()).F("angleEpsilon", t.Field("angleEpsilon").GetValue<float>())
+                .F("mouseCurveStep", 0.05f).F("mouseCurve", Enumerable.Range(0, 501).Select(i => control.mouseCurve.Evaluate(i * 0.05f)))
+                .F("mouseCurveKeys", control.mouseCurve.keys.SelectMany(k => new[] { k.time, k.value, k.inTangent, k.outTangent }))
+                .F("cursor", PathOf(control.fakeCursor)).F("hinge", PathOf(control.hj.transform)).F("slider", PathOf(control.sj.transform))
+                .F("hammerStatic", Mat(hc?.staticFriction)).F("hammerSliding", Mat(hc?.slidingFriction))
+                .F("potStatic", Mat(ps?.staticFriction)).F("potSliding", Mat(ps?.slidingFriction))
+                .F("potBottom", ps?.bottomCol == null ? null : PathOf(ps.bottomCol.transform))
+                .F("potSounds", ps == null ? null : PathOf(ps.transform)).F("hammerCollisions", hc == null ? null : PathOf(hc.transform))
+                .F("terrainLayer", LayerMask.NameToLayer("Terrain"))
+                // their state now (snapshots carry it): sliding or stuck, and the terrain colliders each tracks, as
+                // indices of this dump's collider rows; and whether the controller skips its next input
+                .F("hammerSlide", Traverse.Create(hc).Field("slide").GetValue<bool>())
+                .F("potSlide", Traverse.Create(ps).Field("slide").GetValue<bool>())
+                .F("hammerTracked", Tracked(hc, cols)).F("potTracked", Tracked(ps, cols))
+                .F("mouseSnap", t.Field("mouseSnap").GetValue<bool>()).F("potZ", control.transform.position.z)
+                .F("mouseInput", t.Field("mouseInput").GetValue<Vector2>())
+                .F("mouseVelocityAverage", t.Field("mouseVelocityAverage").GetValue<float>())
+                .F("mw", t.Field("mw").GetValue<Vector2>()).End();
+        }
+
+        // The route the progress is measured along (ProgressMeter's CurvySpline, at the origin, unrotated), as its
+        // GetNearestPointTF / TFToDistance / DistanceToTF read it: each segment's start distance, its approximation
+        // polyline (x, y, z per point; local F = index * step) and the polyline's distances from the segment start.
+        var meter = Object.FindObjectOfType<ProgressMeter>();
+        var route = meter == null ? null : meter.GetComponent<FluffyUnderware.Curvy.CurvySpline>();
+        if (route != null)
+            for (int i = 0; i < route.Count; i++)
+            {
+                var seg = route[i];
+                new Json(sb, "route").F("segment", i).F("distance", seg.Distance).F("length", seg.Length)
+                    .F("step", Traverse.Create(seg).Field("mStepSize").GetValue<float>())
+                    .F("approx", seg.Approximation.SelectMany(p => new[] { p.x, p.y, p.z }))
+                    .F("approxDistances", seg.ApproximationDistances).End();
+            }
 
         foreach (var rb in All<Rigidbody2D>(scene))
             new Json(sb, "body").F("path", PathOf(rb.transform)).F("active", rb.gameObject.activeInHierarchy).F("layer", rb.gameObject.layer)
@@ -65,7 +114,7 @@ static class EngineDump
             o.End();
         }
 
-        foreach (var c in All<Collider2D>(scene))
+        foreach (var c in cols)
         {
             var o = new Json(sb, "collider").F("type", c.GetType().Name).F("path", PathOf(c.transform)).F("layer", c.gameObject.layer)
                 .F("active", c.enabled && c.gameObject.activeInHierarchy).F("trigger", c.isTrigger)
@@ -88,6 +137,10 @@ static class EngineDump
     }
 
     // Every loaded scene: RL mode moves the level's physics into scenes of its own.
+    static IEnumerable<int> Tracked(Component script, List<Collider2D> cols) =>
+        Traverse.Create(script).Field("collisionPoints").GetValue<Dictionary<Collider2D, ContactPoint2D[]>>()?.Keys
+            .Select(k => cols.IndexOf(k)) ?? Enumerable.Empty<int>();
+
     static IEnumerable<T> All<T>(Scene s) where T : Component =>
         Resources.FindObjectsOfTypeAll<T>().Where(x => x.gameObject.scene.IsValid())
             .OrderBy(x => PathOf(x.transform), System.StringComparer.Ordinal);
