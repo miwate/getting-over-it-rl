@@ -17,33 +17,7 @@ from pathlib import Path
 
 import numpy as np
 
-# Observation layout. The plugin appends n_rays distances from the pot to the terrain, counter-clockwise from +x.
-OBS_FIELDS = (
-    "pot_x", "pot_y", "pot_vx", "pot_vy", "pot_angle", "pot_angvel",  # world units, radians
-    "hammer_cos", "hammer_sin", "hammer_angvel", "hammer_ext", "hammer_extvel",
-    "head_contact", "pot_contact", "fell_in_lake", "won",  # 0/1 flags
-    "progress",  # distance along the level route to the point nearest the pot (the game's ProgressMeter)
-    "cursor_dx", "cursor_dy", "cursor_head_dx", "cursor_head_dy",  # the cursor the hammer aims at, from the pot and the head
-    "mouse_x", "mouse_y", "mouse_speed",  # the controller's smoothed mouse input and running mouse speed
-)
-# The route ahead, relative to the pot: points this far further along it (Game.Ahead in the plugin).
-AHEAD = (1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 16, 18, 20, 25, 30, 35, 40, 45, 50)
-OBS_FIELDS += tuple(f"ahead{d}_{axis}" for d in AHEAD for axis in ("dx", "dy"))
-
-
-# Dead ends the level spline reads as headway, as (x0, x1, y0, y1, spline lo, hi, cap): progress there is capped. The
-# trough between the anvil's boulder and the cliff (x ~70-73, y ~240-242; the anvil top is 537 at y ~243-245) reads
-# 539.2: networks dropped in for +2.2 and sat there, never trying the jump from beside the anvil up to the cliff's ledge
-# (545 at (73.8, 248.8)). ponytail: one hand-measured box; goi_env.route (progress along a climbed path) if more appear.
-DEAD_ENDS = ((69.5, 75.0, 230.0, 243.0, 535.0, 541.0, 537.0),)
-_X, _Y, _P = (OBS_FIELDS.index(f) for f in ("pot_x", "pot_y", "progress"))
-
-
-def dead_ends(obs):
-    for x0, x1, y0, y1, lo, hi, cap in DEAD_ENDS:
-        if x0 < obs[_X] < x1 and y0 < obs[_Y] < y1 and lo < obs[_P] < hi:
-            return obs[:_P] + (min(obs[_P], cap),) + obs[_P + 1:]
-    return obs
+from .layout import AHEAD, DEAD_ENDS, FLOORS, OBS_FIELDS, dead_ends  # noqa: E402,F401
 
 
 def free_port():
@@ -72,19 +46,22 @@ def _one_game_starting():
             msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
 
 
-def start(game_dir, port=None, width=640, height=360, args=(), headless=True, **config):
+def start(game_dir, port=None, width=640, height=360, args=(), headless=None, **config):
     """Launch the game in RL mode and connect to it; returns (process, client). Config as in GoiClient.configure;
     args are extra launch flags (e.g. "-goi-colliders").
 
-    Without rendering the game runs headless (Unity's -batchmode -nographics): no window and no graphics device. The
-    physics is the same: 300 steps from the start, and an exported state played on, match a windowed game exactly
-    (2026-10-24). headless=False keeps a (minimized) window, for a game that turns rendering on later.
+    Without rendering the game starts minimized, or headless (Unity's -batchmode -nographics: no window and no
+    graphics device) with headless=True or GOI_HEADLESS=1. The physics is the same: 300 steps from the start, and an
+    exported state played on, match a windowed game exactly (2026-10-24). A game that turns rendering on later needs
+    its window.
 
     Games start one at a time, across all processes, until their level has loaded. A game quits when its client
     disconnects.
     """
     port = port or free_port()
     exe = Path(game_dir) / "GettingOverIt.exe"
+    if headless is None:
+        headless = os.environ.get("GOI_HEADLESS") == "1"
     headless = headless and not config.get("render")
     if headless:
         args = ("-batchmode", "-nographics", *args)
@@ -151,11 +128,15 @@ class GoiClient:
         self.configure(**config)
         self.sock.settimeout(30)
 
-    def configure(self, k=4, n_rays=16, ray_length=10.0, render=False, width=0, height=0, head_rays=0, head_length=4.0):
+    def configure(self, k=4, n_rays=16, ray_length=10.0, render=False, width=0, height=0, head_rays=0, head_length=4.0,
+                  props=False):
         """k physics steps (1/120 s each) per action; width/height 0 keeps the window size; head_rays: distances to
-        the terrain from the hammer head, after the pot's rays."""
+        the terrain from the hammer head, after the pot's rays; props: then the nearest loose prop (the bucket on its
+        rope, the hat): in range, its offset and velocity from the pot, its rotation's sine and cosine, its spin."""
         self.obs_size = self._int(b"k" + struct.pack("<iifiiiif", k, n_rays, ray_length, int(render), width, height,
                                                       head_rays, head_length))
+        if props:
+            self.obs_size = self._int(b"o" + struct.pack("<i", 1))
         self._obs = struct.Struct(f"<{self.obs_size + 1}f")  # then a status: 1 while the pot touches the Snake
         self.on_snake = False
         return self.obs_size

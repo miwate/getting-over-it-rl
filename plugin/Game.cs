@@ -23,6 +23,10 @@ class Game
     public float RayLength = 10f;
     public int HeadRayCount;            // rays from the hammer head, after the pot's: what it can hook (0: none)
     public float HeadRayLength = 4f;
+    public bool Props;                  // PropFields after the rays: the nearest loose prop (the bucket, the hat)
+    public const int PropFields = 8;
+    const float PropRange = 12f;
+    Rigidbody2D[] props;                // the level's bodies outside the player that it can collide with
     public bool Render { get; private set; } = true;
     public static bool Rendering;       // the same, for the plugin's patches: the bats fly in a game that films
     public bool Stepped;                // this Unity frame ran a step: its sound belongs to the film
@@ -96,6 +100,8 @@ class Game
         snake = GameObject.Find("Snake").GetComponent<Collider2D>();
         craneStart = crane.position;
         bodies = InLevel<Rigidbody2D>();
+        props = bodies.Where(b => !b.transform.IsChildOf(player.transform)
+                                  && !Physics2D.GetIgnoreLayerCollision(player.layer, b.gameObject.layer)).ToArray();
         hinges = InLevel<HingeJoint2D>();
         hingeBodies = hinges.Select(h => new[] { Array.IndexOf(bodies, h.attachedRigidbody), Array.IndexOf(bodies, h.connectedBody) }
             .Concat(Enumerable.Range(0, bodies.Length).Where(i => h.connectedBody != null && bodies[i] != h.connectedBody
@@ -228,6 +234,30 @@ class Game
     }
 
     // The observation, then one status value that isn't part of it: 1 while the pot touches the Snake.
+    public int ObsLength => ObsFields + RayCount + HeadRayCount + (Props ? PropFields : 0);
+
+    // The nearest loose prop within PropRange of the pot (a body that moves when hit, e.g. the bucket on its rope): 1,
+    // its centre of mass and velocity relative to the pot's, the sine and cosine of its rotation, its angular velocity
+    // (rad/s). None in range: 0, then zeros (cosine 1). Rays only give where it is; a swing needs how it moves.
+    void WriteProp(float[] o, int at)
+    {
+        Rigidbody2D near = null;
+        float best = PropRange * PropRange;
+        foreach (var b in props)
+        {
+            if (!b.gameObject.activeInHierarchy || b.bodyType != RigidbodyType2D.Dynamic) continue;
+            float d = (b.worldCenterOfMass - pot.position).sqrMagnitude;
+            if (d < best) { best = d; near = b; }
+        }
+        for (int i = 0; i < PropFields; i++) o[at + i] = 0;
+        o[at + 6] = 1;
+        if (near == null) return;
+        Vector2 dp = near.worldCenterOfMass - pot.position, dv = near.velocity - pot.velocity;
+        float a = near.rotation * Mathf.Deg2Rad;
+        o[at] = 1; o[at + 1] = dp.x; o[at + 2] = dp.y; o[at + 3] = dv.x; o[at + 4] = dv.y;
+        o[at + 5] = Mathf.Sin(a); o[at + 6] = Mathf.Cos(a); o[at + 7] = near.angularVelocity * Mathf.Deg2Rad;
+    }
+
     public int Observe(float[] o)
     {
         // Hammer rates come from body velocities: Unity's joint-speed getters spike to nonsense under manual stepping.
@@ -266,8 +296,11 @@ class Game
             var hit = world.Raycast(tip.position, new Vector2(Mathf.Cos(a), Mathf.Sin(a)), HeadRayLength, solid);
             o[ObsFields + RayCount + i] = hit ? hit.distance : HeadRayLength;
         }
-        o[ObsFields + RayCount + HeadRayCount] = pot.IsTouching(snake) ? 1 : 0;
-        return ObsFields + RayCount + HeadRayCount + 1;
+        int n = ObsFields + RayCount + HeadRayCount;
+        if (Props) WriteProp(o, n);
+        n = ObsLength;
+        o[n] = pot.IsTouching(snake) ? 1 : 0;
+        return n + 1;
     }
 
     public void Reset() => Restore(start);
