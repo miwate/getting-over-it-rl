@@ -20,8 +20,6 @@ public class Plugin : BaseUnityPlugin
     //          with 127.0.0.1 (the WSL VM's own address, when WSL's localhost relay fails). -goi-dump: write engine-only data once per level load. -goi-native: at
     //          the same moment, dump the native Box2D world (NativeBox2D) to BepInEx/goi-rl-native-start.jsonl.
     // -goi-colliders: draw the physics shapes over the game (see ColliderOverlay).
-    // -goi-ending: with -goi-rl, a win still ends the episode but the game's own ending runs too (credits, star field,
-    //          the float into space), for recording a finished climb. It deletes the save, as a real win does.
     static readonly string[] Args = Environment.GetCommandLineArgs();
     readonly bool rlMode = Args.Contains("-goi-rl");
     readonly bool dump = Args.Contains("-goi-dump");
@@ -41,7 +39,6 @@ public class Plugin : BaseUnityPlugin
         AudioListener.volume = 0f; // RL games start silent; rendering for a film turns the sound on (Game.SetRender)
         AudioListener.pause = true;
         Patches.Log = Logger;
-        Patches.Ending = Args.Contains("-goi-ending");
         var harmony = Harmony.CreateAndPatchAll(typeof(Patches));
         harmony.PatchAll(typeof(VirtualMouse));
         RecordHooks.Install(harmony, Logger); // the step recorder's event hooks (GameRecord.cs), each guarded
@@ -146,7 +143,7 @@ static class VirtualMouse
 [HarmonyPatch]
 static class Patches
 {
-    public static bool Won, Ending;
+    public static bool Won;
     public static ManualLogSource Log;
     static readonly HashSet<string> blocked = new HashSet<string>();
 
@@ -190,14 +187,14 @@ static class Patches
     [HarmonyPrefix, HarmonyPatch(typeof(OpenGift), "OnCollisionEnter2D")]
     static bool NoGiftBats() => false;
 
-    // Leaving the space zone through the top rolls the credits and deletes the save. In RL mode it only ends the episode,
-    // unless -goi-ending lets the game's ending run as well.
+    // Leaving the space zone through the top rolls the credits and deletes the save. In RL mode it only ends the episode:
+    // the game's own ending never runs, so the save can't be deleted (a flag that let it run is gone on purpose).
     [HarmonyPrefix, HarmonyPatch(typeof(GravityControl), "OnTriggerExit2D")]
     static bool Win(GravityControl __instance, Collider2D coll)
     {
         var rb = coll.attachedRigidbody;
         if (rb == null || rb.position.y <= __instance.GetComponent<BoxCollider2D>().bounds.max.y - 5f) return true;
         Won = true;
-        return Ending;
+        return false;
     }
 }
