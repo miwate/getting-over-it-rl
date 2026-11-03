@@ -1,7 +1,8 @@
 """ctypes wrapper over patched Box2D 2.3.1 (build/box2d/libgoi_box2d.so): the CPU oracle for the JAX engine.
 
 It separates "JAX vs Box2D" error from "Box2D vs Unity" error: the JAX step is checked against this first, and this
-against the game. Build with scripts/build_box2d.sh (fetches and patches the sources); `load()` does it on demand.
+against the game. Build it with scripts/build_box2d.sh, which downloads Box2D's sources and patches them: outside code,
+so only on request (`load(build=True)` runs it; by default a missing library is an error).
 
 Units are Box2D's: radians, body-origin poses, mass data about the centre of mass. Unity-side conversions (degrees,
 layer matrix, Rigidbody2D fields) live in goi_jax/reference/scene.py. All values cross the boundary as float32.
@@ -74,14 +75,15 @@ class Event(C.Structure):
 _lib = None
 
 
-def load(build=True):
-    """The shared library, built first (scripts/build_box2d.sh) if it is missing and build is true."""
+def load(build=False):
+    """The shared library, built first (scripts/build_box2d.sh: downloads Box2D) if it is missing and build is true."""
     global _lib
     if _lib is not None:
         return _lib
     if not LIB_PATH.exists():
         if not build:
-            raise FileNotFoundError(f"{LIB_PATH} missing; run scripts/build_box2d.sh")
+            raise FileNotFoundError(f"{LIB_PATH} missing: run scripts/build_box2d.sh (it downloads Box2D 2.3.1's "
+                                    "sources) to build it")
         subprocess.run([str(REPO_ROOT / "scripts" / "build_box2d.sh")], check=True, stdout=subprocess.DEVNULL)
     lib = C.CDLL(str(LIB_PATH))
     sig = {
