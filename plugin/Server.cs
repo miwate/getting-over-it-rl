@@ -18,6 +18,7 @@ using UnityEngine;
 //   'd' drop_state(int id) -> empty: frees a saved state
 //   'p' place(float along, float dx, float lift, float angle) -> obs, or empty if the climber overlaps the level there
 //   'e' dump_engine(int tag) -> empty: the engine's live state to BepInEx/goi-rl-engine-state-<tag>.jsonl (debugging)
+//   'n', 'w', 'W', 'g' read the game's native memory: only in a game launched with -goi-native (else they answer empty)
 //   'n' dump_native(int tag, int afterStep) -> empty: the native Box2D world to BepInEx/goi-rl-native-<tag>.jsonl, now
 //       or (afterStep 1) right after the next physics step's Simulate; a negative tag also searches memory for where
 //       the engine settings live (NativeBox2D.ScanSettings: slow, and touches settings)
@@ -169,9 +170,12 @@ class Server
                         break;
                     case 'n':
                         Read(8);
-                        var native = Path.Combine(BepInEx.Paths.BepInExRootPath, $"goi-rl-native-{Int(0)}.jsonl");
-                        if (Int(4) != 0) NativeBox2D.WriteAfterNextStep(native, log);
-                        else NativeBox2D.Write(native, log, Int(0) < 0);
+                        if (NativeBox2D.Enabled)
+                        {
+                            var native = Path.Combine(BepInEx.Paths.BepInExRootPath, $"goi-rl-native-{Int(0)}.jsonl");
+                            if (Int(4) != 0) NativeBox2D.WriteAfterNextStep(native, log);
+                            else NativeBox2D.Write(native, log, Int(0) < 0);
+                        }
                         Send(0);
                         break;
                     case 'q':
@@ -179,14 +183,14 @@ class Server
                         break;
                     case 'w':
                         Read(8);
-                        SendBytes(game.Record(new Vector2(Float(0), Float(4))));
+                        SendBytes(NativeBox2D.Enabled ? game.Record(new Vector2(Float(0), Float(4))) : new byte[0]);
                         break;
                     case 'W':
                         Read(8);
-                        SendBytes(game.RecordAction(new Vector2(Float(0), Float(4))));
+                        SendBytes(NativeBox2D.Enabled ? game.RecordAction(new Vector2(Float(0), Float(4))) : new byte[0]);
                         break;
                     case 'g':
-                        SendBytes(game.Geometry());
+                        SendBytes(NativeBox2D.Enabled ? game.Geometry() : new byte[0]);
                         break;
                     case 'u':
                         SendBytes(System.Text.Encoding.UTF8.GetBytes(game.RouteJson()));
