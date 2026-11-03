@@ -18,7 +18,8 @@ public class Plugin : BaseUnityPlugin
     //          only on request, and never writes PlayerPrefs. -goi-connect N: dial a client listening on 127.0.0.1:N
     //          instead (for clients in WSL); -goi-host A: dial address A too, alternating
     //          with 127.0.0.1 (the WSL VM's own address, when WSL's localhost relay fails). -goi-dump: write engine-only data once per level load. -goi-native: at
-    //          the same moment, dump the native Box2D world (NativeBox2D) to BepInEx/goi-rl-native-start.jsonl.
+    //          the same moment, dump the native Box2D world (NativeBox2D) to BepInEx/goi-rl-native-start.jsonl; and
+    //          the only way to allow native memory reads at all (the bridge's 'n', 'w', 'W', 'g', the recorder's hooks).
     // -goi-colliders: draw the physics shapes over the game (see ColliderOverlay).
     static readonly string[] Args = Environment.GetCommandLineArgs();
     readonly bool rlMode = Args.Contains("-goi-rl");
@@ -41,7 +42,8 @@ public class Plugin : BaseUnityPlugin
         Patches.Log = Logger;
         var harmony = Harmony.CreateAndPatchAll(typeof(Patches));
         harmony.PatchAll(typeof(VirtualMouse));
-        RecordHooks.Install(harmony, Logger); // the step recorder's event hooks (GameRecord.cs), each guarded
+        NativeBox2D.Enabled = native;  // native memory reads and the step recorder: only with -goi-native
+        if (native) RecordHooks.Install(harmony, Logger); // the step recorder's event hooks (GameRecord.cs), each guarded
         int patched = harmony.GetPatchedMethods().Count();
         Logger.LogInfo($"RL mode: {patched} methods patched");
         server = new Server(IntArg("-goi-port", 5555), Logger, IntArg("-goi-connect", 0), StrArg("-goi-host"));

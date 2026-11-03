@@ -19,6 +19,10 @@ using UnityEngine;
 // never commit it.
 static partial class NativeBox2D
 {
+    // Native reads, the step recorder and its hooks only in a game launched with -goi-native (Plugin): without it the
+    // bridge's 'n', 'w', 'W' and 'g' answer empty and nothing here runs.
+    internal static bool Enabled;
+
     // Offsets in Unity 2020.3's fork, x64, read off the dumps (v2.3.1's in comments where they differ). Unity keeps
     // v2.3.1's structs and field order but inserts fields of its own: per-fixture mass data, two floats and an int in
     // b2Body, the island indices and four floats in b2Joint, extra words in b2Contact, dynamic arrays and a moved
