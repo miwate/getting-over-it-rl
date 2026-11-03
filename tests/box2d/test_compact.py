@@ -83,6 +83,7 @@ def test_round_trip():
 @pytest.mark.skipif(not (DATA / "index.json").exists(), reason=f"no recordings in {DATA}")
 def test_game_sim_compact_bit_exact():
     """The game's lockstep Sim: K=4 actions from recorded states with the compact Model equal the full layout's."""
+    pytest.importorskip("goi_jax.game", reason="the game env is in krzim's fork")
     from goi_jax.game import sim as SM
     from goi_jax.parity import states as S
     full = SM.Sim.from_recordings(DATA)
@@ -114,6 +115,7 @@ def test_culled_scan_game():
     new pairs than slots: the first ones in candidate order are kept)."""
     if jax.default_backend() != "cpu":
         pytest.skip("interpret-mode parity runs on CPU")
+    pytest.importorskip("goi_jax.game", reason="the game env is in krzim's fork")
     from goi_jax.box2d import pairs as XP
     from goi_jax.box2d.gpu import pairs as GP
     from goi_jax.game import sim as SM

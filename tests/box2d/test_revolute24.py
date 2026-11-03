@@ -159,6 +159,7 @@ def _k24(inv, rA, rB):
 
 def _native_hinge_rows():
     """(joint name, step-start bodies A/B, stored joint fields after Simulate) for every solved hinge step."""
+    pytest.importorskip("goi_jax.parity", reason="the recordings' decoder is in krzim's fork")
     from goi_jax.parity.states import decode, iter_chains
     for _, c in iter_chains(PARITY_ROOT):
         names = c.names["body_names"]
