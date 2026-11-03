@@ -19,3 +19,7 @@ goi-rl/
 
 # The README's screenshot tool (not part of the agent)
 scripts/readme_shots.py
+
+# Upstream sources fetched by scripts/fetch_box2d.sh, and native builds
+third_party/
+build/

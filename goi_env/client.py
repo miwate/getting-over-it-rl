@@ -4,7 +4,6 @@ Smoke test (stdlib only; launches the game, exercises every command, then quits 
     python -m goi_env.client --game-dir "C:/.../steamapps/common/Getting Over It"
 """
 import ctypes
-import msvcrt
 import os
 import socket
 import struct
@@ -12,10 +11,13 @@ import subprocess
 import tempfile
 import time
 from contextlib import contextmanager
-from ctypes import wintypes
 from pathlib import Path
 
 import numpy as np
+
+if os.name == "nt":  # the launcher's start lock and window control; a client in WSL connects through goi_jax.bridge
+    import msvcrt
+    from ctypes import wintypes
 
 from .layout import AHEAD, DEAD_ENDS, FLOORS, OBS_FIELDS, dead_ends  # noqa: E402,F401
 
@@ -111,18 +113,18 @@ class GoiClient:
     Actions are the mouse input the game reads each physics step (the controller turns it into cursor motion).
     """
 
-    def __init__(self, port=5555, timeout=180.0, **config):
+    def __init__(self, port=5555, timeout=180.0, sock=None, **config):
         deadline = time.monotonic() + 180
-        while True:  # the bridge starts listening a few seconds after launch (a minute or more on a loaded machine)
+        while sock is None:  # the bridge starts listening a few seconds after launch (a minute or more on a loaded machine)
             try:
-                self.sock = socket.create_connection(("127.0.0.1", port), timeout=5)
-                break
+                sock = socket.create_connection(("127.0.0.1", port), timeout=5)
             except OSError as e:
                 if time.monotonic() > deadline:
                     raise ConnectionError(
                         f"no bridge on port {port} after 180 s. Is the game running with -goi-rl? With BepInEx's "
                         "default disk logging, at most 5 modded games can run from one install at a time.") from e
                 time.sleep(0.5)
+        self.sock = sock
         self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         self.sock.settimeout(timeout)  # the first reply waits for the level to load
         self.configure(**config)
@@ -136,7 +138,7 @@ class GoiClient:
         self.obs_size = self._int(b"k" + struct.pack("<iifiiiif", k, n_rays, ray_length, int(render), width, height,
                                                       head_rays, head_length))
         if props:
-            self.obs_size = self._int(b"o" + struct.pack("<i", 1))
+            self.obs_size = self._int(b"b" + struct.pack("<i", 1))
         self._obs = struct.Struct(f"<{self.obs_size + 1}f")  # then a status: 1 while the pot touches the Snake
         self.on_snake = False
         return self.obs_size
@@ -166,6 +168,43 @@ class GoiClient:
         """Write the engine's live state (bodies, joints, colliders, settings) to BepInEx/goi-rl-engine-state-<tag>.jsonl,
         to find what differs between two runs that should match. Derived from game data: never commit it."""
         self._call(b"e" + struct.pack("<i", tag))
+
+    def dump_native(self, tag, after_step=False):
+        """Write the native Box2D world (bodies in list order, fixtures with their convex shapes, contacts with full
+        manifolds, joints with impulses) to BepInEx/goi-rl-native-<tag>.jsonl, now or right after the next physics
+        step's solve (the climber's joints lose their impulses at the end of every action). A negative tag also
+        searches memory for where the engine settings live. Derived from game data: never commit it."""
+        self._call(b"n" + struct.pack("<ii", tag, int(after_step)))
+
+    def controller(self):
+        """The controller's constants as a dict (the plugin's 'controller' row): deadzone, sensitivity, trackpad,
+        epsilons, the three AnimationCurves (keys, tangents, weights, wrap modes, and Unity's own Evaluate on grids),
+        the hammer's and pot's static/sliding friction materials, PlayerControl's cached motor structs, the friction
+        scripts' thresholds, the code literals, a Mono float probe, and the step recorder's script-field names."""
+        import json
+        return json.loads(bytes(self._call(b"q")).decode("utf-8"))
+
+    def record_step(self, mouse_x, mouse_y):
+        """One physics step at K = 1, exactly as step() runs it, returned as a binary record (bytes): script state
+        before / after the controller / after the step, the native Box2D world right before and after Simulate, and the
+        events in between. Decode with goi_jax.parity.states.parse_record. Derived from game data: never commit it."""
+        return bytes(self._call(b"w" + struct.pack("<ff", mouse_x, mouse_y)))
+
+    def geometry(self):
+        """Every fixture of the current physics world with its shape, and the collider/body/joint index tables that
+        records use (bytes; goi_jax.parity.states.parse_geometry). Derived from game data: never commit it."""
+        return bytes(self._call(b"g"))
+
+    def route(self):
+        """The level route and Observe's level constants as a dict (plugin GameRoute.cs): LevelSpline's segments
+        (Curvy approximation cache, distances, interpolation points), the lake / Snake / space-zone colliders, ray
+        layers, and probes of the game's own spline queries. Derived from game data: never commit it."""
+        import json
+        return json.loads(bytes(self._call(b"u")).decode("utf-8"))
+
+    def observe(self):
+        """The observation of the current state without stepping (as step() would return it after record_step)."""
+        return self._obs_call(b"o")
 
     def export_state(self, state_id):
         """A saved state as bytes, which import_state loads in any other game (another launch too)."""

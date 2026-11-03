@@ -45,6 +45,16 @@ The circle in the top corner of each picture is the networks' mouse input.
   specialized in one stretch of the route and chained along it.
 - Continuous games from the bottom show where the networks get stuck, and those spots get targeted training.
 
+## Box2D in JAX
+
+[krzim](https://github.com/krzim) contributed a re-implementation of the game's physics engine (Box2D 2.3.1, as Unity
+runs it) in JAX, batched over thousands of worlds on a GPU (`goi_jax/box2d`, with Box2D's
+[license notice](goi_jax/box2d/LICENSE-Box2D.txt)), and plugin commands to record the game step by step and read its
+native physics world. The game rules and the trainer built on it stay in
+[krzim's fork](https://github.com/krzim/getting-over-it-rl/tree/jax-engine): with them, krzim reports one network,
+trained only in the simulator, that finishes the real game in 17 of 20 climbs from the bottom
+([model and logs](https://huggingface.co/zimmerk4/getting-over-it-rl-jax)).
+
 ## Models
 
 The networks and a video are on [Hugging Face](https://huggingface.co/miiwater/goi-rl).

@@ -1,0 +1,48 @@
+--- a/Box2D/Common/b2Math.cpp
++++ b/Box2D/Common/b2Math.cpp
+@@ -20,6 +20,8 @@
+ 
+ const b2Vec2 b2Vec2_zero(0.0f, 0.0f);
+ 
++int32 b2_trigMode = 0; // goi: see b2Sin in b2Math.h
++
+ /// Solve A * x = b, where b is a column vector. This is more efficient
+ /// than computing the inverse in one-shot cases.
+ b2Vec3 b2Mat33::Solve33(const b2Vec3& b) const
+--- a/Box2D/Common/b2Math.h
++++ b/Box2D/Common/b2Math.h
+@@ -49,6 +49,13 @@
+ #define	b2Sqrt(x)	sqrtf(x)
+ #define	b2Atan2(y, x)	atan2f(y, x)
+ 
++/// goi: the sine and cosine b2Rot uses. b2_trigMode 0 (stock): the C library's sinf/cosf, whose last bit
++/// differs between libraries (glibc 2.39 misrounds ~1.4% of angles; the game's MSVC CRT is unknown).
++/// 1: (float32)sin((double)x), the correctly rounded value, which the JAX port reproduces exactly.
++extern int32 b2_trigMode;
++inline float32 b2Sin(float32 x) { return b2_trigMode ? (float32)sin((double)x) : sinf(x); }
++inline float32 b2Cos(float32 x) { return b2_trigMode ? (float32)cos((double)x) : cosf(x); }
++
+ /// A 2D column vector.
+ struct b2Vec2
+ {
+@@ -304,16 +311,16 @@
+ 	explicit b2Rot(float32 angle)
+ 	{
+ 		/// TODO_ERIN optimize
+-		s = sinf(angle);
+-		c = cosf(angle);
++		s = b2Sin(angle);
++		c = b2Cos(angle);
+ 	}
+ 
+ 	/// Set using an angle in radians.
+ 	void Set(float32 angle)
+ 	{
+ 		/// TODO_ERIN optimize
+-		s = sinf(angle);
+-		c = cosf(angle);
++		s = b2Sin(angle);
++		c = b2Cos(angle);
+ 	}
+ 
+ 	/// Set to the identity rotation
