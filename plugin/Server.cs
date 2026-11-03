@@ -67,14 +67,24 @@ class Server
         if (connectPort > 0)
         {
             // WSL2's localhost relay sometimes stops forwarding new ports (a launch then never connected in 180 s);
-            // the WSL VM's own address doesn't depend on it.
-            dialHosts = IPAddress.TryParse(host ?? "", out var extra) ? new[] { IPAddress.Loopback, extra } : new[] { IPAddress.Loopback };
+            // the WSL VM's own address doesn't depend on it. Only a local address, never one beyond this PC's network.
+            bool local = IPAddress.TryParse(host ?? "", out var extra) && Local(extra);
+            if (host != null && !local) log.LogWarning($"-goi-host {host} ignored: only a loopback or private IPv4 address");
+            dialHosts = local ? new[] { IPAddress.Loopback, extra } : new[] { IPAddress.Loopback };
             log.LogInfo($"bridge will dial {string.Join(", ", dialHosts.Select(h => h.ToString()).ToArray())} port {connectPort}");
             return;
         }
         listener = new TcpListener(IPAddress.Loopback, port);
         listener.Start();
         log.LogInfo($"bridge listening on 127.0.0.1:{port}");
+    }
+
+    // Loopback or a private IPv4 range (10/8, 172.16/12, 192.168/16; the WSL VM's address is one).
+    static bool Local(IPAddress a)
+    {
+        if (a.AddressFamily != AddressFamily.InterNetwork) return false;
+        var b = a.GetAddressBytes();
+        return b[0] == 127 || b[0] == 10 || (b[0] == 172 && b[1] >= 16 && b[1] <= 31) || (b[0] == 192 && b[1] == 168);
     }
 
     // Reverse mode: one connection attempt per half second until the client's listener answers.
