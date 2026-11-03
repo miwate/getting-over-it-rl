@@ -49,8 +49,9 @@ static partial class NativeBox2D
     {
         pages.Clear();
         long body = BodyOf(anchor);
-        if (body == 0) return null;
-        long world = Blk.Read(body, Layout.BodySize).P(Layout.BodyWorld);
+        var block = body == 0 ? null : Blk.Read(body, Layout.BodySize);
+        if (block == null) return null;
+        long world = block.P(Layout.BodyWorld);
         long head = Head(body, Layout.BodyPrev);
         if (maps != null && maps.World == world && maps.BodyListHead == head) return maps;
         var m = new RecordMaps { World = world, BodyListHead = head };
@@ -65,6 +66,7 @@ static partial class NativeBox2D
         foreach (long b in m.Bodies)
         {
             var bb = Blk.Read(b, Layout.BodySize);
+            if (bb == null) continue;  // unreadable: its fixtures stay unmapped, their contacts read (-1, -1)
             var perCollider = new Dictionary<int, int>();
             foreach (long f in Chain(bb.P(Layout.BodyFixtures), Layout.FixNext))
             {
@@ -155,6 +157,7 @@ static partial class NativeBox2D
         foreach (long b in m.Bodies)
         {
             var bb = Blk.Read(b, Layout.BodySize);
+            if (bb == null) { w.Write(-1); w.Write(-1); w.Write(0); continue; }  // unreadable: no index, no type, no fixtures
             var fixtures = Chain(bb.P(Layout.BodyFixtures), Layout.FixNext);
             w.Write(RbIndex(m, bb));
             w.Write(bb.I(Layout.BodyType));
