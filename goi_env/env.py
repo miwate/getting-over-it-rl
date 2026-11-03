@@ -58,7 +58,7 @@ class GoiEnv(gym.Env):
 
     def __init__(self, game_dir=None, port=None, k=4, n_rays=32, ray_length=15.0, time_penalty=0.001, stall_steps=None,
                  stall_ends=True, snake_ends=False, action_cost=0.0, mouse=MOUSE, recovery=0.0, regress=0.0, air_bonus=0.0, speed_bonus=0.0,
-                 render_mode=None, realtime=True, width=640, height=360, game_args=(), headless=True, head_rays=0, head_length=4.0,
+                 render_mode=None, realtime=True, width=640, height=360, game_args=(), headless=None, head_rays=0, head_length=4.0, props=True,
                  record_reset=None, held_records=False):
         """Launches the game from game_dir on a free port, or with game_dir=None connects to one already running on
         `port` (default 5555).
@@ -70,8 +70,11 @@ class GoiEnv(gym.Env):
         (how far below the record) then stays in the range the networks trained on: after falls from 230-290 to ~105
         it read ~125, and networks that climb from there 50/50 times froze for the rest of an hour.
         game_args: extra launch flags, e.g. ["-goi-colliders"] to draw the physics shapes over the game.
-        headless: without rendering, the game runs with no window or graphics device (client.start); False for a game
-            that will turn rendering on later (start_rendering).
+        props: after the rays, the nearest loose prop within 12 of the pot (the bucket on its rope, the hat): 1, its
+            offset and velocity from the pot, the sine and cosine of its rotation, its spin (8 fields; train.Player drops
+            them for a network from before, and a warm start gives them zero weights).
+        headless: without rendering, run the game with no window or graphics device (client.start; by default only with
+            GOI_HEADLESS=1); False for a game that will turn rendering on later (start_rendering).
         action_cost: subtracted from the reward times the mean squared action, so big mouse moves have to pay off.
         mouse: mouse input at action 1.
         recovery, regress, air_bonus, speed_bonus: progress_reward's weights.
@@ -91,7 +94,8 @@ class GoiEnv(gym.Env):
         self.weights = dict(recovery=recovery, regress=regress, air_bonus=air_bonus, speed_bonus=speed_bonus)
         self.held_records = held_records
         self._config = config = dict(k=k, n_rays=n_rays, ray_length=ray_length, render=render_mode is not None,
-                                     width=width, height=height, head_rays=head_rays, head_length=head_length)
+                                     width=width, height=height, head_rays=head_rays, head_length=head_length,
+                                     props=props)
         if game_dir:
             self._proc, self.client = start(game_dir, port, args=game_args, headless=headless, **config)
         else:
@@ -261,7 +265,12 @@ if __name__ == "__main__":  # python -m goi_env.env: progress_reward's guarantee
     X, Y = OBS_FIELDS.index("pot_x"), OBS_FIELDS.index("pot_y")
     for x, y, p, want in [(72.5, 240.6, 539.2, 537.0),  # in the anvil's trough: the anvil top's progress
                           (69.0, 244.2, 539.2, 539.2),  # beside the anvil, where win-e4 jumped from: as read
-                          (73.8, 248.8, 545.0, 545.0)]:  # on the cliff's ledge
+                          (73.8, 248.8, 545.0, 545.0),  # on the cliff's ledge
+                          (7.2, 264.6, 636.2, 634.5),  # on the Snake's lip beside the bucket: below the bucket's 635
+                          (16.6, 270.1, 635.0, 640.0),  # on the bucket: above the spot it is jumped onto from
+                          (11.9, 266.7, 635.1, 635.1),  # that spot
+                          (9.8, 269.3, 638.4, 635.5),  # clinging to the overhang's face: below the bucket
+                          (19.1, 269.4, 628.3, 628.3)]:  # beside the bucket on the way in from the snowy ledge
         obs[X], obs[Y], obs[PROGRESS] = x, y, p
         assert dead_ends(tuple(obs))[PROGRESS] == want
-    print("dead ends: ok")
+    print("dead ends and floors: ok")

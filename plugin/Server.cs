@@ -17,6 +17,7 @@ using UnityEngine;
 //   'p' place(float along, float dx, float lift, float angle) -> obs, or empty if the climber overlaps the level there
 //   'e' dump_engine(int tag) -> empty: the engine's live state to BepInEx/goi-rl-engine-state-<tag>.jsonl (debugging)
 //   'f' frame -> int width, int height, then RGB rows top-down: the image rendered after the last step (render on)
+//   'o' props(int on) -> int obs length: Game.PropFields more after the rays (the nearest loose prop), off by default
 //   'a' audio -> int sample rate, int channels, then float32 samples: the sound played since the last 'a' (render on)
 //   'x' export_state(int id) -> the saved state as bytes (empty for an unknown id), loadable in any other game
 //   'i' import_state(int n, then n bytes) -> int id of a new saved state, or -1 if it doesn't fit this level/plugin
@@ -69,7 +70,12 @@ class Server
                         if (Int(16) > 0 && Int(20) > 0) Screen.SetResolution(Int(16), Int(20), FullScreenMode.Windowed);
                         game.HeadRayCount = Mathf.Clamp(Int(24), 0, obs.Length - Game.ObsFields - game.RayCount - 1);
                         game.HeadRayLength = Mathf.Max(Float(28), 0.01f);
-                        SendInt(Game.ObsFields + game.RayCount + game.HeadRayCount);
+                        SendInt(game.ObsLength);
+                        break;
+                    case 'o':
+                        Read(4);
+                        game.Props = Int(0) != 0;
+                        SendInt(game.ObsLength);
                         break;
                     case 'r':
                         game.Reset();
