@@ -1,0 +1,15 @@
+# Anvil pits: a chain of long jumps from the start. Copies of the game's anvil (friction 0.5) stand on rock pillars,
+# their tops level with the start ground (y -3.4), over pits that widen: 3, 4 and 5 m, then 3 m to the level's first
+# wall (x -16), where the original level resumes. The pits go down 11 m to the lake's bottom (RestartOnContact): a fall
+# restarts the game and ends an episode. Launch flag: -goi-map anvil-pits.
+look Mountain/Intresto_rock055_252vert_500face_scale_1m_tex_sandstone1
+off Water                                           # the lake's surface, drawn in front of the pits
+hide -38.6 -14 -17 3                                # the rocks between the start ledge (ends at x -39) and the wall
+
+# anvil centres -34.65, -27.95, -20.25 (each 2.7 m wide); pillars 1.6 m wide under them
+rock -35.45 -14.6  -33.85 -14.6  -33.85 -4.7  -35.45 -4.7
+clone Mountain/Anvil -34.65 -4.7
+rock -28.75 -14.6  -27.15 -14.6  -27.15 -4.7  -28.75 -4.7
+clone Mountain/Anvil -27.95 -4.7
+rock -21.05 -14.6  -19.45 -14.6  -19.45 -4.7  -21.05 -4.7
+clone Mountain/Anvil -20.25 -4.7
