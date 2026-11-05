@@ -28,5 +28,7 @@
 
   <Target Name="Deploy" AfterTargets="Build">
     <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(GameDir)\BepInEx\plugins" />
+    <ItemGroup><Maps Include="..\maps\*.txt" /></ItemGroup>
+    <Copy SourceFiles="@(Maps)" DestinationFolder="$(GameDir)\BepInEx\plugins\goi-maps" /> <!-- -goi-map <name> -->
   </Target>
 </Project>
