@@ -20,7 +20,8 @@ public class Plugin : BaseUnityPlugin
     //          with 127.0.0.1 (the WSL VM's own address, when WSL's localhost relay fails). -goi-dump: write engine-only data once per level load. -goi-native: at
     //          the same moment, dump the native Box2D world (NativeBox2D) to BepInEx/goi-rl-native-start.jsonl; and
     //          the only way to allow native memory reads at all (the bridge's 'n', 'w', 'W', 'g', the recorder's hooks).
-    // -goi-colliders: draw the physics shapes over the game (see ColliderOverlay).
+    // -goi-colliders: draw the physics shapes over the game (see ColliderOverlay). -goi-map <name>: edit the level as it
+    //          loads (RL mode; maps/<name>.txt, see MapLoader).
     static readonly string[] Args = Environment.GetCommandLineArgs();
     readonly bool rlMode = Args.Contains("-goi-rl");
     readonly bool dump = Args.Contains("-goi-dump");
@@ -48,7 +49,14 @@ public class Plugin : BaseUnityPlugin
         Logger.LogInfo($"RL mode: {patched} methods patched");
         server = new Server(IntArg("-goi-port", 5555), Logger, IntArg("-goi-connect", 0), StrArg("-goi-host"));
         StartCoroutine(AnswerFrameRequests());
-        SceneManager.sceneLoaded += (scene, _) => { if (scene.name == "Mian") game = new Game(); }; // before Start(): authored start pose
+        var map = StrArg("-goi-map");
+        SceneManager.sceneLoaded += (scene, _) =>
+        {
+            if (scene.name != "Mian") return;
+            try { if (map != null) MapLoader.Load(scene, map); } // before Game lists the level's physics objects
+            catch (Exception e) { Logger.LogError($"-goi-map {map}: {e}"); Application.Quit(1); return; } // fail fast, not a client timeout
+            game = new Game(); // before Start(): authored start pose
+        };
     }
 
     // A frame can only be read once rendering has finished, so frame requests are answered at the end of the frame. The
